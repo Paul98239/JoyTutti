@@ -9,9 +9,9 @@
 
 import { Store, rafThrottle, setMarqueeText } from '../ui.js';
 import * as synth from './synth.js';
-import { parseMidi, midiNoteName } from './midiParser.js';
+import { parseMidi, midiNoteName } from '../midi/midiParser.js';
 import { downloadMidiFile, fetchCategories, searchSongs } from './midiApi.js';
-import { KEYBOARD_SLOT, LOOKAHEAD_MS } from './scheduler.js';
+import { KEYBOARD_SLOT, LOOKAHEAD_MS } from '../performance/scheduler.js';
 
 export { KEYBOARD_SLOT, LOOKAHEAD_MS };   // main.js 交給 keyboard.js 的觸發槽位；__latency() 拿 LOOKAHEAD_MS 當排程 tick 間隔的門檻
 

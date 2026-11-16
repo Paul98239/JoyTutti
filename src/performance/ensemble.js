@@ -1,5 +1,4 @@
 // ensemble.js — 合奏的判斷規則：門檻數字、拍與 ms 的換算、名單（誰先開始演奏）與帶頭的人怎麼挑。純函式與資料結構，不碰合成器與排程器的狀態。
-// 規則見規格（docs/design-spec.md）「合奏」（使用者是不熟音樂的一般人、老年人：區間寬、要連續幾下才處理）。
 
 // 應用層數字（起始值，之後用錄音調；不是規格）。拍＝四分音符（timeDivision tick）；門檻＝max(拍數 × 目前一拍的 ms, ms 下限)，ms 下限＝150 BPM 時的長度，歌再快也不再縮。
 export const ENSEMBLE = Object.freeze({

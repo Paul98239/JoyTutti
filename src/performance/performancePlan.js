@@ -4,7 +4,7 @@
 
 import { rateBoundsFor } from './tempo.js';
 import { holdCapTicksFor, holdGapTolerance } from './voices.js';
-import { byFileOrder, GM_DEFAULT_MIXER, BANK_MSB_RHYTHM } from './midiParser.js';
+import { byFileOrder, GM_DEFAULT_MIXER, BANK_MSB_RHYTHM } from '../midi/midiParser.js';
 
 // 一個 part 的 staff 規格：沒有 staves 的 part（手工組的舊資料形狀）視為單一 staff，id 沿用 part.id
 export function staffSpecsOf(part) {

@@ -1,5 +1,5 @@
 /* ============================================================
-   styles.css — HarmonyFlow 全域樣式（唯一樣式來源）
+   styles.css — JoyTutti 全域樣式（唯一樣式來源）
    層疊順序（@layer）：base（token／reset）→ ui（版面骨架與元件外觀，依 DOM 順序）→ states（狀態：[hidden]、accent「開啟」、:focus-visible、@media）。
    後宣告的層永遠贏過先宣告的層，所以 states 裡的規則不需要 !important；⚠️ 沒包進任何層的規則會贏過所有層，新規則一定要放進對應的層。
    整體縮放：浮動 UI（播放 pill、控制列）以 --ui-fs 當基準字級、內部一律 em，整組一起縮放。

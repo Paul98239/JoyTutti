@@ -3,8 +3,8 @@
 // 跟演奏互斥（共用 synth 的 channel），任何一邊開始前都先 flushPreviousSong() 把另一邊停掉。
 // 被指派的聲部固定走 synthHuman（velocity 用樂譜原值），沒被指派的走 synth；HUMAN_EMPHASIS_GAIN 刻意大於 1.0 讓真人聲部突出，電腦輔助軌不掛額外 gain，是音量對比的基準。
 
-import { Scheduler, CHANNELS_PER_PORT, DEFAULT_PORTS, portsNeeded } from './scheduler.js';
-import { CC, DRUM_CHANNEL } from './midiParser.js';
+import { Scheduler, CHANNELS_PER_PORT, DEFAULT_PORTS, portsNeeded } from '../performance/scheduler.js';
+import { CC, DRUM_CHANNEL } from '../midi/midiParser.js';
 
 // 試聽（PreviewPlayer）：位元組原樣交給官方 Sequencer 自己解析、自己排程（整個在 AudioWorklet 裡，不走 scheduler.js 的主執行緒 tick），
 // 所以我們的 parser 解析失敗時試聽仍可用，聽感也能跟演奏對照。這裡只做：等官方非同步載入的結果（songChange／midiError／逾時／被中斷）、

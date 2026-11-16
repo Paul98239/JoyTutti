@@ -3,7 +3,7 @@
 // 控制器 shadow：每個合成器 × 輸出 channel 一份（每個 CC、program、pitch bend、channel pressure 最後送出的值）；狀態類的補送（載入、早按的 chase、重播、改指派）
 // 只送跟 shadow 不同的值，暫停時放開延音踏板、彎音歸中央，續播再恢復。同一個輸出 channel 的控制器依送出順序生效（_ordered()），shadow 才會等於合成器最後的狀態。
 
-import { CC, RESET_CC, PARAMETER_CC, GM_DEFAULT_MIXER, PITCH_BEND_CENTER } from './midiParser.js';
+import { CC, RESET_CC, PARAMETER_CC, GM_DEFAULT_MIXER, PITCH_BEND_CENTER } from '../midi/midiParser.js';
 
 // channel 的單一來源（synth.js 經 scheduler.js 轉出 import）。模仿官方 SpessaSynth Sequencer：一個 port 16 個 channel，依需要的 port 數往上補、只增不減，每個 port 的 channel 9 是打擊。
 // DEFAULT_PORTS 是合成器開機就補到的 port 數；歌曲需要更多時由 synth.js 的 load() 依 portsNeeded() 補，再用 setPortCount() 告訴排程器。

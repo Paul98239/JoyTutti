@@ -282,7 +282,7 @@ function scheduleRender() {
   });
 }
 
-/** 一鍵初始化（main.js 呼叫），同步完成不等網路。player＝midi/midiPlayer.js 的模組命名空間（帶 playerStore 與區塊模組形狀）。 */
+/** 一鍵初始化（main.js 呼叫），同步完成不等網路。player＝player/midiPlayer.js 的模組命名空間（帶 playerStore 與區塊模組形狀）。 */
 export function initUi(player) {
   playerModule = player;
   regions = [...regions, player];
