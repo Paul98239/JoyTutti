@@ -1,5 +1,5 @@
-// tempo.js — 按鍵節奏：估速（playbackRate＝樂譜秒 ÷ 真實秒，命名同官方 Sequencer）、每首歌的速度區間、去抖，與保管這些狀態的 TempoFollower（N6、N7；每個 driver 群組一份）。
-// 檔案 BPM 已包含在樂譜秒裡，所以「檔案 BPM × playbackRate」就是你現在的有效 BPM。常數的依據是對曲庫實際樂譜、七種演奏者模型的模擬評估（見規格文件 N6）。
+// tempo.js — 按鍵節奏：估速（playbackRate＝樂譜秒 ÷ 真實秒，命名同官方 Sequencer）、每首歌的速度區間、去抖，與保管這些狀態的 TempoFollower（每個 driver 群組一份）。
+// 檔案 BPM 已包含在樂譜秒裡，所以「檔案 BPM × playbackRate」就是你現在的有效 BPM。常數的依據是對曲庫實際樂譜、七種演奏者模型的模擬評估。
 
 // 估速視窗：最近 8 個間隔（9 個按鍵）。只看 1 個間隔手抖會被直接放大；視窗 4～8 個按鍵在所有情境都穩，8 個最好。
 export const RATE_WINDOW_INTERVALS = 8;

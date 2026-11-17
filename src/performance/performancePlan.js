@@ -75,7 +75,7 @@ function buildStaves(score, assignments, router) {
 // 輸出 channel 是依打擊／旋律分配的，中途互換要重新分配（不做，見 buildControls 的警告）。
 export const switchesKit = (staff, ev) => ev.type === 'controlChange' && ev.data1 === 0 && (ev.value === BANK_MSB_RHYTHM) !== staff.percussionKit;
 
-// 狀態補送（chase）不送 tick 0 的 bank select／program change：tick 0 的音色是初始音色的事（staff.program／bank，A9），從控制器軌重送可能矛盾
+// 狀態補送（chase）不送 tick 0 的 bank select／program change：tick 0 的音色是初始音色的事（staff.program／bank），從控制器軌重送可能矛盾
 const isPatchEvent = (ev) => ev.type === 'programChange' || (ev.type === 'controlChange' && (ev.data1 === 0 || ev.data1 === 32));
 export const stateEvents = (events) => events.filter((ev) => ev.ticks > 0 || !isPatchEvent(ev));
 

@@ -33,7 +33,7 @@ export const DEFAULT_TRACKING_CONFIG = Object.freeze({
   // 候選人跨幀關聯的距離（「這一幀這筆偵測是不是上一幀那個候選人」），一樣以尺度為單位。
   pendingAssocDist: 0.15,
   pendingAssocDistRatio: 1.0,
-  // 尺度本身也要平滑，否則單幀的雜訊會讓上面那些門檻跟著跳動；0.1 同 ForgeRhythm 的 updateBodyScale（spec 11.9 第 3 點）。
+  // 尺度本身也要平滑，否則單幀的雜訊會讓上面那些門檻跟著跳動；0.1 同我同事的數值。
   scaleEmaAlpha: 0.1,
 
   // 繪製用的短暫保留（getDrawableTracks）：
@@ -176,7 +176,7 @@ export function dedupeDetections(detections, cfg = DEFAULT_TRACKING_CONFIG, anch
 // 尺度＝max(肩寬, c × 軀幹長)，以畫面寬為單位：側身時肩寬縮到接近 0，軀幹長（肩膀中點到髖中點）不縮；髖部看不到時只用肩寬。
 // 正規化座標的 x 以寬、y 以高為單位，y 先乘 aspect（＝高 ÷ 寬）：不換的話 16:9 畫面上直的軀幹長會多算 1.78 倍，正面站著的人尺度就變成肩寬的兩倍多。
 // c＝0.6：正面時肩寬 ÷ 軀幹長，MediaPipe 官方範例人像量到 0.63、2026-10-29 三段逐幀紀錄量到 0.68～0.72，取略小的值讓正面時由肩寬決定（門檻維持原本以肩寬訂的意思）、
-// 側身時約為正面肩寬的 0.95（量法：test/tools/pose-filter-eval.mjs 的 c）。
+// 側身時約為正面肩寬的 0.95。
 export const BODY_SCALE_TORSO_RATIO = 0.6;
 const HIP_VISIBILITY_MIN = 0.5;
 
@@ -191,16 +191,16 @@ export function bodyScaleOf(landmarks, c, aspect) {
 // One Euro（Casiez, Roussel, Vogel, CHI 2012, DOI 10.1145/2207676.2208639），照 MediaPipe 的 one_euro_filter.cc：
 // 速度＝(這一幀原始值 − 上一幀原始值) × valueScale ÷ dt，先以 dCutoff 低通；截止頻率＝minCutoff＋beta × |速度|；輸出＝以該截止頻率低通。
 // 一階低通的輸出永遠落在上一個輸出與這一幀輸入之間，不會過衝；時間戳沒有變新時原樣回傳輸入、不改狀態（MediaPipe 同）。
-// 每個節點依序過 ONE_EURO_STAGES 的每一層（10-28 的量測表在 docs/superpowers/subproject-1/2026-10-28-pose-filter-redesign.md）：
+// 每個節點依序過 ONE_EURO_STAGES 的每一層：
 //   人數 1：MediaPipe 內建已先平滑一層（min_cutoff 0.05、beta 80，速度除以它的推論框尺度），我們再加 EXTRA 一層（內建之後靜止時手腕仍抖 0.5～1.4px）。
 //     EXTRA 照作者的順序在 v3 舊紀錄上掃（beta 0 先定壓抖動的 minCutoff，再取最快動作延遲 ≤ 10ms 的最小 beta，同一把尺重掃 9.8ms）。
 //   人數 ≥ 2：MediaPipe 不平滑；先用 MEDIAPIPE_EQUIVALENT 補上它那一層，再接同一個 EXTRA，兩種人數的骨架一樣穩、一樣跟手。
 //     MediaPipe 的速度除以推論框尺度（pose_landmarks_detector_graph.cc 把下一幀的推論框接到平滑的 OBJECT_SCALE_ROI，(寬＋高) ÷ 2，像素），
-//     我們除以 track.scale（肩寬），所以 beta＝80 ÷（推論框是幾個肩寬）。2026-10-28 實測（test/tools/mp-smoothing-scale/）：官方範例人像在無頭 Chromium 裡等速平移，
+//     我們除以 track.scale（肩寬），所以 beta＝80 ÷（推論框是幾個肩寬）。2026-10-28 實測：官方範例人像在無頭 Chromium 裡等速平移，
 //     人數 2 的原始輸出過這一層、跟人數 1 的真平滑逐幀比，移動中的平均落後量在 6.2（15～240px/s）、6.5（10～30px/s）個肩寬時一致；取 6，偏差 < 0.07px。
 //   2026-10-29 用 v6 紀錄（canon-2duet-visionlog-20261029-*，有真的靜止段）重掃：mc 0.5～8 × beta 5～40 的抖動、延遲都在目標內，mc 2、beta 20 不換；
 //     EXTRA 改用 2D 合成速度（speed2d，見 OneEuroFilter2D）：x、y 各算各時谷底比原始晚一幀的觸發超過一成（時刻差 p90 48ms），2D 降到 32ms 以內、靜止抖動多不到 0.03px。
-//     MediaPipe 等效層照 MediaPipe 各算各。量測表在 docs/superpowers/subproject-1/2026-10-28-subproject1-review.md 6.9。
+//     MediaPipe 等效層照 MediaPipe 各算各。
 const MP_ROI_SHOULDERS = 6;
 const MEDIAPIPE_EQUIVALENT = Object.freeze({ minCutoff: 0.05, beta: 80 / MP_ROI_SHOULDERS, dCutoff: 1 });
 const EXTRA = Object.freeze({ minCutoff: 2, beta: 20, dCutoff: 1, speed2d: true });

@@ -37,7 +37,7 @@ export function beatMs(score, tick, rate) {
 }
 
 /**
- * 相對時間 x（ms，正＝超前、負＝落後）落在哪個區間：同步／稍快稍慢／偏離／脫隊（規格「合奏」）。prevZone＝他上一下的區間：
+ * 相對時間 x（ms，正＝超前、負＝落後）落在哪個區間：同步／稍快稍慢／偏離／脫隊。prevZone＝他上一下的區間：
  * 不是同步時，|x| 要退到 SYNC_EXIT 以內才回到同步（進出用不同門檻，免得在邊界閃）。
  */
 export function classifyOffset(xMs, beatMsValue, prevZone) {
@@ -52,7 +52,7 @@ export function classifyOffset(xMs, beatMsValue, prevZone) {
 export const stage1GraceMs = (stepMs) => Math.max(stepMs * ENSEMBLE.STAGE1_GRACE_FRACTION, ENSEMBLE.STAGE1_GRACE_MIN_MS);
 
 /**
- * 第二段防呆（規格「合奏」）：要不要由電腦代打。任一成立：錯過 ≥ k 下而且離他上一下 ≥ max(STAGE2_BEATS 拍, STAGE2_MIN_MS)；錯過 ≥ 1 下而且離上一下
+ * 第二段防呆：要不要由電腦代打。任一成立：錯過 ≥ k 下而且離他上一下 ≥ max(STAGE2_BEATS 拍, STAGE2_MIN_MS)；錯過 ≥ 1 下而且離上一下
  * ≥ max(STAGE2_SPARSE_BEATS 拍, STAGE2_SPARSE_MIN_MS)（聲部很稀疏）；錯過 ≥ 1 下而且連續 ABSENT_STAGE2_MS 不在鏡頭裡。
  */
 export function shouldSubstitute({ missed, sinceLastMs, beatMs: beat, absentMs = 0, k = ENSEMBLE.STAGE2_K }) {

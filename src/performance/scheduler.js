@@ -1,10 +1,10 @@
 // scheduler.js — 排程器：每位演奏者按一下放行他的聲部（driver）的下一個起音；伴奏（follower）跟著帶頭的人的速度排好時刻；單位是 MIDI tick。
-// 你的音一律在 trigger() 呼叫內立即 noteOn，不經 tick、不帶時間戳（例外：被鎖成預按的那一下——前奏鎖 N8、休止符鎖、揮手超前鎖——到點由 tick() 放出）；排程器時鐘（_clockMs）只在 tick()／trigger()／lift() 前進，暫停時不走。
-// keyup 模式：輸入事件帶 key（鍵盤的 event.code）時，你的音按下 noteOn、放開（lift()）noteOff，不做 hold；不帶 key 的（手勢、槽位觸發）行為完全不變（N10）。
+// 你的音一律在 trigger() 呼叫內立即 noteOn，不經 tick、不帶時間戳（例外：被鎖成預按的那一下——前奏鎖、休止符鎖、揮手超前鎖——到點由 tick() 放出）；排程器時鐘（_clockMs）只在 tick()／trigger()／lift() 前進，暫停時不走。
+// keyup 模式：輸入事件帶 key（鍵盤的 event.code）時，你的音按下 noteOn、放開（lift()）noteOff，不做 hold；不帶 key 的（手勢、槽位觸發）行為完全不變。
 // 沒有任何 driver（沒有指派，或指派的聲部都沒有音符）＝整首自動播放：只有第 0 段，從開頭照原速放完（同一條程式路徑）。
 // 每位演奏者（performancePlan.js 的 performers）在這裡有一份執行期狀態（makePerformerState()），去抖、估速、游標各自一份；伴奏一份合奏狀態（makeEnsemble()），
 // 只在帶頭的人觸發時重新對時（合奏位置、hold 判定、對外的 playbackRate 看帶頭的人）。
-// 預報入口 setForecaster()：每個 tick 問預報器「你會在什麼時刻按下一個起音」，收到有效預報就段中換錨、重排還沒送出的電腦音（_applyForecast）；預設沒有預報器，行為完全不變（N2）。
+// 預報入口 setForecaster()：每個 tick 問預報器「你會在什麼時刻按下一個起音」，收到有效預報就段中換錨、重排還沒送出的電腦音（_applyForecast）；預設沒有預報器，行為完全不變。
 // 所有合成器呼叫都經過 voices.js。
 
 import { TempoFollower, minPressIntervalSec, maxGroupSpanSec } from './tempo.js';
@@ -402,7 +402,7 @@ export class Scheduler {
   /**
    * 唯讀快照（複本）：測試、工具與之後的視覺化用，取代直接讀私有欄位。陣列與物件都是新的；note 是樂譜裡的同一個物件（唯讀，不複製）。
    * groups 每位演奏者一筆（依指派下拉順序；整首自動播放時是一筆空的）；ensemble 是合奏；最上層的 playbackRate／rateBounds 是合奏（帶頭的人）的。
-   * performers 是給子專案 2～4 的合奏狀態（規格「合奏」的對外狀態），每位演奏者一筆：來源、名次（不在名單是 -1）、是不是帶頭的人、狀態、區間與相對時間 x（拍與 ms）、
+   * performers 是合奏的對外狀態，每位演奏者一筆：來源、名次（不在名單是 -1）、是不是帶頭的人、狀態、區間與相對時間 x（拍與 ms）、
    * 速度、游標、錯過幾下（數到 stage2K）、離他上一下多久（沒觸發過是 Infinity）。
    */
   inspect() {
@@ -582,10 +582,10 @@ export class Scheduler {
   }
 
   // 可以帶頭：狀態正常、聲部還沒彈完、不在休止中；現任的帶頭的人不必另外證明「正在彈」（合奏本來就停著等他），其他人要正在彈（ensemble.js 的 isActive）。
-  // 不是現任的人，合奏位置在他的休止裡就不能帶頭，除非他正在觸發（entering）他的進場音：交還在他觸發進場音（或休止符鎖放出）時（規格「合奏」）——
+  // 不是現任的人，合奏位置在他的休止裡就不能帶頭，除非他正在觸發（entering）他的進場音：交還在他觸發進場音（或休止符鎖放出）時——
   // 只看「休止還剩幾拍」的話，交棒時合奏往前跳一點、剩不到 1 拍，他馬上又被當成回來，在同一個門檻上來回跳。
   // 「還在等自己的下一個起音」只算彈長音的人：下一個起音前面是休止的人要真的觸發了才算回來。
-  // 揮手確認前，只有在還沒有任何人確認時才能（暫時）帶頭（規格「合奏」的名單）；已經暫時帶頭的人留到確認或逾時。status＝要求的狀態（候補的第一順位是 'trouble'，見 _updateLeader）。
+  // 揮手確認前，只有在還沒有任何人確認時才能（暫時）帶頭；已經暫時帶頭的人留到確認或逾時。status＝要求的狀態（候補的第一順位是 'trouble'，見 _updateLeader）。
   _isCandidate(p, current, clock, entering = null, status = 'ok') {
     if (!p || p.status !== status || p.cursor >= p.plan.driverSegs.length || this._isResting(p)) return false;
     if (p === current) return true;
@@ -595,7 +595,7 @@ export class Scheduler {
     return isActive({ sinceLastMs: clock - p.lastTriggerMs, beatMs: this._beatMsNow(), resting: false, waiting: reach !== null && clock < reach });
   }
 
-  // 揮手還沒確認、而名單上已經有人確認：不能帶頭（規格「合奏」的名單）
+  // 揮手還沒確認、而名單上已經有人確認：不能帶頭
   _provisionalBlocked(p) { return this._roster.isProvisional(p.slot) && this._roster.hasConfirmed(); }
 
   // 候補的第二順位（_updateLeader）：在自己夠長的休止裡（合奏照他的速度走到他的進場音就停）；被代打、彈完的不算
@@ -626,7 +626,7 @@ export class Scheduler {
     this._updateLeader(clock);
   }
 
-  // 第二段防呆（規格「合奏」）：不是帶頭的人錯過太多下就由電腦代打（ensemble.js 的 shouldSubstitute）。有預按的人算已經觸發了；合奏停著等帶頭的人時
+  // 第二段防呆：不是帶頭的人錯過太多下就由電腦代打（ensemble.js 的 shouldSubstitute）。有預按的人算已經觸發了；合奏停著等帶頭的人時
   // 不會走過任何人的起音，錯過的下數不會增加。從沒觸發過的人「離上一下多久」從合奏開始走過他的起音算。
   _checkSubstitutes(clock) {
     let beat = null;
@@ -655,7 +655,7 @@ export class Scheduler {
     return a.clockMs + ((this._secOf(r[1]) - a.scoreSec) * 1000) / a.rate;
   }
 
-  // 他錯過了幾下（規格「合奏」）：從他下一個要按的起音起，依他的來源與速度併成的「一下」（同近距分組），起音已經落在合奏位置往前
+  // 他錯過了幾下：從他下一個要按的起音起，依他的來源與速度併成的「一下」（同近距分組），起音已經落在合奏位置往前
   // ENSEMBLE.MISSED_BEHIND_BEATS 拍以前的個數；數到 stage2K 就夠了。
   _missedCount(p) {
     const lim = this._ticksBefore(this.getPositionTicks(), ENSEMBLE.MISSED_BEHIND_BEATS), ticks = p.plan.driverTicks, cap = this.cfg.stage2K;
@@ -664,7 +664,7 @@ export class Scheduler {
     return n;
   }
 
-  // 代打（規格「合奏」）：演奏者 q 從合奏位置 T 起由電腦照合奏錨點替他放（進入代打、合奏重新對時時都呼叫）。排好但還沒做的：T 之前的自動放行在這一刻做，
+  // 代打：演奏者 q 從合奏位置 T 起由電腦照合奏錨點替他放（進入代打、合奏重新對時時都呼叫）。排好但還沒做的：T 之前的自動放行在這一刻做，
   // T 之前起音的音照垂直切片（還該響著的追音、整顆在身後的跳過）；從 T 起到合奏停的位置之前，他的起音照合奏錨點排：音帶 lookahead 時間戳走真人軌（同組裡被併入的音）、
   // 每個起音一個自動放行（到點收音、放行 hold）、控制器跟著合奏時間軸。他的速度改成合奏的速度（音長與 hold 的收尾照合奏）。
   _substituteFrom(q, T, clock) {
@@ -717,9 +717,9 @@ export class Scheduler {
     q.anchor = { slice: q.cursor, clockMs: a.clockMs, scoreSec: a.scoreSec, rate };
   }
 
-  // 代打中的人再觸發（規格「合奏」的代打與交還）：對到時間上最近的起音（比起音在合奏時間軸上的時刻）。最近的是電腦已經替他放的那一下（自動放行、進入代打時補的追音、lookahead 已經送出的都算）→ 接手不重彈
+  // 代打中的人再觸發：對到時間上最近的起音（比起音在合奏時間軸上的時刻）。最近的是電腦已經替他放的那一下（自動放行、進入代打時補的追音、lookahead 已經送出的都算）→ 接手不重彈
   //（keyup 模式改成等這個鍵放開；揮手照原本的收音；那顆音已經結束就沒有聲音——改放下一個起音會多推一格），這一下照一般觸發進估速，回傳 false；
-  // 最近的是還沒放的下一個 → 回傳 null，由 _trigger 照一般觸發處理（含 x 與鎖）。之後電腦不再替他排；名次不變，狀態先標成 trouble：恢復正常（_trackRecovery）才能重新帶頭（規格「合奏」）。
+  // 最近的是還沒放的下一個 → 回傳 null，由 _trigger 照一般觸發處理（含 x 與鎖）。之後電腦不再替他排；名次不變，狀態先標成 trouble：恢復正常（_trackRecovery）才能重新帶頭。
   _takeOver(p, ev, clock, motion) {
     this._emitTimed(clock);   // 到期的先放、自動放行先做：游標與「已經放了」才對
     this._emitClock(clock);
@@ -749,7 +749,7 @@ export class Scheduler {
   }
 
   // 重新挑帶頭的人：名單上第一位可以帶頭的（_isCandidate）；現任出狀況時，正常的人也不能自己已經停住（_stallWhy）：還算正在彈、卻已過了自己寬限的人，交過去同一刻就停住，
-  // 帶頭會卡在他身上直到他不算正在彈（規格「合奏」的兩段防呆）。帶頭的人休止中時，只交給在他的進場音之前有要按的起音的人（規格「合奏」：彈長音跨過他整段休止的人
+  // 帶頭會卡在他身上直到他不算正在彈（兩段防呆）。帶頭的人休止中時，只交給在他的進場音之前有要按的起音的人（彈長音跨過他整段休止的人
   // 不用伴奏往前走，合奏照他的速度走到進場音等他）。沒有正常的人可以接、而現任出狀況又停住（或已經不在名單上）時，交給名單上第一位還在的人：出狀況但還在彈、
   // 沒有停住的，其次在自己休止裡的（使用者 2026-10-22 定；不然其他人的觸發都被休止符鎖、超前鎖吞掉，整首卡住），原帶頭的人交給第二段防呆。換候補在他剛出狀況的那一刻（呼叫端給了 reason）；
   // 之後每個 tick 重新檢查時，出狀況的現任（含候補自己又停住）要已經不算正在彈（離上一下超過 ENSEMBLE.ACTIVE_BEATS 拍、或不在鏡頭裡）才換，不然候補一停頓就換下一位。
@@ -960,8 +960,8 @@ export class Scheduler {
     p.lastTriggerMs = motion;
     p.lastSource = ev.source ?? null;
     this._admit(p, ev, motion);
-    // 還沒有人帶頭：他先成為帶頭的人，這一下照帶頭的人處理（前奏、N2 早按）。已經有人帶頭：這一下先照不是帶頭的人處理（x、跳、鎖），再看要不要換人——
-    // 先換的話，落後的人這一下會以帶頭的人的身分放他落後的起音，合奏停在原處等他、不會跳到合奏位置（規格「合奏」）
+    // 還沒有人帶頭：他先成為帶頭的人，這一下照帶頭的人處理（前奏、早按）。已經有人帶頭：這一下先照不是帶頭的人處理（x、跳、鎖），再看要不要換人——
+    // 先換的話，落後的人這一下會以帶頭的人的身分放他落後的起音，合奏停在原處等他、不會跳到合奏位置
     if (!cur) this._updateLeader(clock, null, false, p);
     const released = this._triggerBody(p, ev, clock, motion);
     // 新加入的人因為同時開始排到現任前面：換人的原因是 tie。這一下也可能是他最後一個起音（彈完交棒）
@@ -1000,7 +1000,7 @@ export class Scheduler {
     const blocked = p.tempo.attempt(motion, head === null ? 0 : ((this._secOf(p.plan.driverTicks[j]) - head) * 1000) / p.tempo.playbackRate);
     if (blocked) { this._pressEvent(p, ev, clock, 'blocked'); return false; }
 
-    // 相對時間 x 與區間（規格「合奏」）：落後太多就跳到合奏位置；揮手超前太多就鎖到只超前 1/2 拍
+    // 相對時間 x 與區間：落後太多就跳到合奏位置；揮手超前太多就鎖到只超前 1/2 拍
     const before = { zone: p.zone, offRun: p.offRun };
     let act = this._classify(p, j, motion, ev.source), jumped = false;
     if (act === 'jump') {
@@ -1008,7 +1008,7 @@ export class Scheduler {
       this._clockMs = clock;
       this._lastTickMs = ev.receivedMs;
       const chased = this._jumpBehind(p, ev, clock, motion);
-      // 合奏位置上沒有他的音在響：游標已經移到下一個起音，這一下當成提早觸發它（照休止符鎖，區間重新判斷；規格「合奏」）
+      // 合奏位置上沒有他的音在響：游標已經移到下一個起音，這一下當成提早觸發它（照休止符鎖，區間重新判斷）
       j = p.groupEnd;
       if (chased || j >= p.plan.driverSegs.length) {
         this._trackRecovery(p, clock, motion, this._positionAt(motion), true);
@@ -1055,7 +1055,7 @@ export class Scheduler {
     return this._beatsBetween(e, r[1]) >= ENSEMBLE.REST_LOCK_BEATS && this._positionAt(clock) < r[1] - 1e-6;
   }
 
-  // 這一下（放第 j 個起音）的相對時間 x 與區間（規格「合奏」）：x＝起音的樂譜位置 − 他動作時刻的合奏位置，用合奏的速度換成 ms。
+  // 這一下（放第 j 個起音）的相對時間 x 與區間：x＝起音的樂譜位置 − 他動作時刻的合奏位置，用合奏的速度換成 ms。
   // 回傳要不要特別處理（只對不是帶頭的人）：'jump'＝落後，偏離同方向連續 ENSEMBLE.OFF_PERSIST 下或脫隊；'lock'＝揮手超前，條件同；null＝照常（鍵盤超前一律照常）。
   // 連續的計數處理過也不重數（最近兩下都偏離就算；多數決也看它，見 _majorityOff）。
   _classify(p, j, motion, source) {
@@ -1095,7 +1095,7 @@ export class Scheduler {
     p.steady = null;
   }
 
-  // 第一段防呆（規格「合奏」）：帶頭的人出狀況就標成 trouble，交給名單上下一位正常而且正在彈的人（沒有人可接時見 _updateLeader 的候補）。
+  // 第一段防呆：帶頭的人出狀況就標成 trouble，交給名單上下一位正常而且正在彈的人（沒有人可接時見 _updateLeader 的候補）。
   // 停住（_stallWhy）或 'majority'＝三人以上時其他正在彈的人過半同方向偏離、各連續 ENSEMBLE.MAJORITY_PERSIST 下。有預按的人算已經觸發了。
   _checkLeaderTrouble(clock) {
     const L = this._ensemble.leader;
@@ -1150,8 +1150,8 @@ export class Scheduler {
     this.events.flush();
   }
 
-  // 落後跳（規格「合奏」）：不放他的下一個起音，改放他的聲部在合奏位置 e 該響著的音（起音 ≤ e < 結尾；追音，長度＝剩餘 ÷ 速度），整顆在 e 之前的跳過，
-  // 游標移到第一個 > e 的起音，他的時間軸從 e 重新起算；e 落在一組近距起音中間時，同組後面的起音當這一下的組員到點自動放行（N11）——
+  // 落後跳：不放他的下一個起音，改放他的聲部在合奏位置 e 該響著的音（起音 ≤ e < 結尾；追音，長度＝剩餘 ÷ 速度），整顆在 e 之前的跳過，
+  // 游標移到第一個 > e 的起音，他的時間軸從 e 重新起算；e 落在一組近距起音中間時，同組後面的起音當這一下的組員到點自動放行——
   // 不然他下一下會被對到這組剩下的音，一直慢一組、每隔一下又跳，估速也從很短的樂譜間隔算而掉到下限。
   // e 上沒有他的音在響（休止、斷奏的空檔）時只做到跳過與移游標（控制器帶到下一個起音之前），
   // 回傳 false，由呼叫端把這一下當成提早觸發下一個起音。估速歷史從這一下重新開始：跳過的那段不是他彈的間隔。
@@ -1307,9 +1307,9 @@ export class Scheduler {
     return n;
   }
 
-  // 早按時的垂直切片（N2；Antescofo 的 @tight＋@local、DAW 的 Chase Events）：演奏者 p 按下起音 T_k（ticks）時，佇列裡還沒輪到、起音在 T_k 之前的音，endTick > T_k 的追音（現在發聲，長度＝檔案裡 T_k 到結尾的剩餘長度 ÷ 速度，hold 照舊，見 _sound），
+  // 早按時的垂直切片（Antescofo 的 @tight＋@local、DAW 的 Chase Events）：演奏者 p 按下起音 T_k（ticks）時，佇列裡還沒輪到、起音在 T_k 之前的音，endTick > T_k 的追音（現在發聲，長度＝檔案裡 T_k 到結尾的剩餘長度 ÷ 速度，hold 照舊，見 _sound），
   // endTick ≤ T_k 的整顆在他身後，跳過（記進 _skipped，isFinished 才算得對）。處理的是他自己的佇列；他帶頭時連伴奏的佇列一起（withEnsemble），依建批次的順序，同 tick 的音排在一起，所以追音順序就是樂譜順序。
-  // 還沒送出的控制器不逐一重播：先把控制器軌帶到 T_k 之前的狀態（_chaseLane，在追音之前），還沒送出的整體參數 SysEx 依序馬上送（N12）。組裡被併入、還沒送出的他的音（own）同理；已經提早送出的取消不了（inFlight，記在 chase 事件裡）。
+  // 還沒送出的控制器不逐一重播：先把控制器軌帶到 T_k 之前的狀態（_chaseLane，在追音之前），還沒送出的整體參數 SysEx 依序馬上送。組裡被併入、還沒送出的他的音（own）同理；已經提早送出的取消不了（inFlight，記在 chase 事件裡）。
   _chaseOrSkip(p, ticks, scoreSec, clock, inFlight = 0, withEnsemble = false) {
     const E = this._ensemble;
     const left = withEnsemble ? bySeq(p.timed, E.timed) : p.timed;
@@ -1522,7 +1522,7 @@ export class Scheduler {
     };
   }
 
-  // 段中換錨（N2「預報入口」）：預報說他會在 f.atMs 按下一個起音，條件符合時以（現在, 此刻的樂譜位置 pos, r′）為新錨點，把他的佇列（他帶頭時連伴奏的）裡還沒送出、樂譜位置在 pos 之後的音與控制器照 r′ 重排時刻；同 tick 的、lookahead 已送出的、已經在響的、pos 之前已過期的都碰不到。
+  // 段中換錨（預報入口）：預報說他會在 f.atMs 按下一個起音，條件符合時以（現在, 此刻的樂譜位置 pos, r′）為新錨點，把他的佇列（他帶頭時連伴奏的）裡還沒送出、樂譜位置在 pos 之後的音與控制器照 r′ 重排時刻；同 tick 的、lookahead 已送出的、已經在響的、pos 之前已過期的都碰不到。
   // 近距起音分組進行中時，「下一個起音」是下一個要他按的組頭（組裡的起音到點自動放行，一起依新速度重排）。
   _applyForecast(p, f) {
     if (!f) return;
@@ -1560,7 +1560,7 @@ export class Scheduler {
     this._ledger.closeDue(this._clockMs, horizonMs);     // 剛發聲就到期的短音
     // 預按到點放出。前奏鎖：他的播放頭走到入場點；休止符鎖：合奏走到他的起音；超前鎖：合奏走到只差 ENSEMBLE.AHEAD_RELEASE_BEATS 拍。放行時刻取「剛好到達」的那一刻
     //（不是這個 tick 的時鐘），他這一段的錨點因此接在合奏的時間軸上；落在這一刻到現在之間的電腦音由 _release() 裡的 _emitTimed() 補放。
-    // 放出也算他觸發了一下（「正在彈」從這一刻算：休止中的原帶頭者在休止符鎖放出時拿回帶頭，見規格「合奏」）。
+    // 放出也算他觸發了一下（「正在彈」從這一刻算：休止中的原帶頭者在休止符鎖放出時拿回帶頭）。
     for (const p of this._performers) {
       const c = p.credit;
       if (!c) continue;

@@ -1,6 +1,6 @@
 // timeline.js — 時間層：速度表、tick ↔ 秒（midiTicksToSeconds／secondsToMIDITicks，名稱照官方 BasicMIDI）、拍號與調號表、port 偏移（絕對 channel）、小節與拍格線。
 // 規格寫進檔案的是格線（division、FF 51 速度、FF 58 拍號），足以把任何 tick 精確還原成第幾拍、第幾秒；格線上的音樂意義（小節線、弱起、強弱、swing、複拍子律動）
-// 規格沒寫，只能推導，推導必帶假設，只在明確標示假設的地方做（規格文件假設表的 A 項目）。
+// 規格沒寫，只能推導，推導必帶假設，只在明確標示假設的地方做。
 
 import { META, makeWarn } from './midiFile.js';
 
@@ -163,8 +163,8 @@ export function buildPortOffsets(tracks) {
 
 /**
  * 依拍號與 timeDivision 推算全曲小節線。拍號中途變更處強制斷一條小節線（該段最後一小節可能不完整）；樂曲真正結尾的最後一小節不截短，
- * 保留完整名目長度（演奏者仍有整小節的揮手窗口）。SMPTE division 沒有四分音符概念，timeDivision 為 null，回傳空陣列，呼叫端退回沒有格線的路徑（A5）。
- * 弱起拍不處理，格線一律從 tick 0 起算，有弱起的檔案所有小節線與拍位會整體平移（A1）。
+ * 保留完整名目長度（演奏者仍有整小節的揮手窗口）。SMPTE division 沒有四分音符概念，timeDivision 為 null，回傳空陣列，呼叫端退回沒有格線的路徑。
+ * 弱起拍不處理，格線一律從 tick 0 起算，有弱起的檔案所有小節線與拍位會整體平移。
  *
  * FF58 的四個位元組（nn dd cc bb）餵給兩種拍長，都是規格欄位算出來的：
  * - notatedBeatTicks（記譜拍長，算小節長度用）＝一個 dd 音符值有幾個 tick。bb（RP-001 p.10：一個 MIDI 四分音符／24 clocks 等於幾個記譜三十二分音符）

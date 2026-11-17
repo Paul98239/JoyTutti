@@ -304,7 +304,7 @@ function collectNotes(tracks, midiTicksToSeconds, warn, programResolver, staffIn
     const pending = new Map();
     // 沒有對應 note on 的 note off（孤立 note off）：先收集，軌處理完才分類。MuseScore 的樂器有多個演奏法 channel（普通、撥奏、震音），每個音起音時會對其他演奏法的 channel
     // 補送一個同音高的 note off（把它們切掉），一首歌可以有上千個。認得出這種補送（同一軌、同 tick、同音高，別的 channel 有 note on）就不警告；認不出的才依 channel 計數各報一則
-    // （逐個報警會洗版，還會撞到警告數量上限把後面真正的警告吃掉）。這是匯出器的慣例，不是 SMF 規格（規格文件 A16）；孤立 note off 不管有沒有警告都被忽略，不影響音符。
+    // （逐個報警會洗版，還會撞到警告數量上限把後面真正的警告吃掉）。這是匯出器的慣例，不是 SMF 規格；孤立 note off 不管有沒有警告都被忽略，不影響音符。
     const strayOffs = [];        // { channel, ticks, pitch }
     // (tick, 音高) → 在這個位置有 note on 的 channel 集合，用 16 位元整數當位元遮罩（第 c 位是 1 ＝ channel c 在場）。key 用 tick * 128 + 音高（音高 0～127 不會撞；tick 最大約 1e7，乘 128 仍遠小於 2^53）
     const onChannelsAt = new Map();

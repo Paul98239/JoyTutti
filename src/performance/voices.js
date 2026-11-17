@@ -321,8 +321,8 @@ export class OutputRouter {
   }
 }
 
-// VoiceLedger：發聲帳本。每個譜表正在響的音（staff.sounding：音高 → 依發聲順序排隊的佇列）、同音高先進先出收音、hold（loop 等你按下一個起音，N10）的判定與放行、
-// 尾巴收尾（同譜表新音發聲時截短舊音，N3）、你的下一次按鍵時依 tick 先收、暫停時全部收音。合成器指令都經 OutputRouter，收發音事件排進對外事件（scheduler.js）。
+// VoiceLedger：發聲帳本。每個譜表正在響的音（staff.sounding：音高 → 依發聲順序排隊的佇列）、同音高先進先出收音、hold（loop 等你按下一個起音）的判定與放行、
+// 尾巴收尾（同譜表新音發聲時截短舊音）、你的下一次按鍵時依 tick 先收、暫停時全部收音。合成器指令都經 OutputRouter，收發音事件排進對外事件（scheduler.js）。
 // 帳本只管「正在響的音」：時鐘、hold 等的起音序列與游標、速度這些「目前」的值由排程器呼叫時傳進來；hold 容差、tick → 樂譜秒的換算在載入／改指派時綁定（bind()）。
 // hold 依 tick 記、分擁有者（holdScope：演奏者槽位——代打的音也是，由電腦替他做的自動放行收——或 'ensemble'＝伴奏的音，等合奏走到那個 tick）。
 

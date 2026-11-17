@@ -33,7 +33,7 @@ export function warmPoseModel() {
 // MediaPipe 的 numPoses（同時追幾個人）決定它的工作模式：「追到的人數 ≥ numPoses」時偵測器跳過、每個人的 ROI 由上一幀的 landmark 延續——沒有幽靈骨架、節點最穩；
 // 「追到的人數 < numPoses」時偵測器每幀重跑，幽靈與抖動都是這個狀態的產物。設小了多出來的人不會被偵測到，這是設定的字面意思。
 // landmarker 在 Worker（poseWorker.js）裡、只有一份：選了「現場人數」N 才建 numPoses=N 的那份，之後換人數用 setOptions() 原地更新；追蹤層的槽位數（＝ ID 上限）也設成 N（setPoseCount）。
-// 推論放在 Worker：detectForVideo 是同步的、會卡住呼叫它的執行緒（官方文件），放在主執行緒時按鍵、按鈕與伴奏排程都要排隊等它（見 docs/mediapipe-performance-reference.md）。
+// 推論放在 Worker：detectForVideo 是同步的、會卡住呼叫它的執行緒（官方文件），放在主執行緒時按鍵、按鈕與伴奏排程都要排隊等它。
 
 const POSE_COLORS = ["#00FFFF", "#FF6B6B", "#51CF66", "#FFD43B"]; // 4 人的代表色彩（依鎖定槽位對應）
 const BONE_WIDTH = 2;      // 骨架連線寬度（px）
@@ -69,7 +69,7 @@ let frameLogRecording = false;
 const r1 = (v) => Math.round(v * 10) / 10;
 const r3 = (v) => (v === null || v === undefined ? null : Math.round(v * 1000) / 1000);
 const r4 = (v) => (v === null || v === undefined ? null : Math.round(v * 10000) / 10000);
-// 「節點」欄記脖子以下全部 22 點（11～32：肩、肘、腕、手掌、髖、膝、踝、腳跟、腳尖；v4／v5 只到 24）：調過濾器與尺度用（test/tools/pose-filter-eval.mjs），
+// 「節點」欄記脖子以下全部 22 點（11～32：肩、肘、腕、手掌、髖、膝、踝、腳跟、腳尖；v4／v5 只到 24）：調過濾器與尺度用，
 // 也留給之後的肢體動作。不在記錄時依 presence 篩點：「猜出來的點」本身就是要從紀錄量門檻的資料
 const LOG_JOINTS = Array.from({ length: 22 }, (_, i) => 11 + i);
 
