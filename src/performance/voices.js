@@ -7,7 +7,7 @@ import { CC, RESET_CC, PARAMETER_CC, GM_DEFAULT_MIXER, PITCH_BEND_CENTER } from 
 
 // channel 的單一來源（synth.js 經 scheduler.js 轉出 import）。模仿官方 SpessaSynth Sequencer：一個 port 16 個 channel，依需要的 port 數往上補、只增不減，每個 port 的 channel 9 是打擊。
 // DEFAULT_PORTS 是合成器開機就補到的 port 數；歌曲需要更多時由 synth.js 的 load() 依 portsNeeded() 補，再用 setPortCount() 告訴排程器。
-// 不能讀 synth.midiChannels.length 當 channel 數（addNewChannel() 會雙重 push，見 synth.js），數字只由這裡與 synth.js 自己計數。
+// 不能讀 synth.midiChannels.length 當 channel 數（addNewChannel() 之後要等 worklet 回 channelAdded 才算進去，見 synth.js），數字只由這裡與 synth.js 自己計數。
 export const CHANNELS_PER_PORT = 16;
 export const DEFAULT_PORTS = 4;
 // GM 預設值（官方 SpessaSynth 的 DEFAULT_MIDI_CONTROLLERS；沒列的是 0）：重設 channel 時，中途改過、CC121 不管的控制器送回這個值。
@@ -44,7 +44,7 @@ function allocateChannels(staves, melodicChannels, drumChannels) {
   const kitChannel = new Map(); // 鼓組 program → 輸出 channel
   let next = 0;
   for (const s of staves) {
-    // percussionKit 已是 GM2 Bank Select（CC0/32）判定過的結果：channel 9 明確用 Bank 121 切成旋律通道時不會被誤送進打擊 channel（見 parts.js 的 buildPart()）
+    // percussionKit 已是 GM2 Bank Select（CC0/32）判定過的結果：channel 9 明確用 Bank 121 切成旋律通道時不會被誤送進打擊 channel（見 parts.js 的 isPercussionBank()）
     if (s.percussionKit) {
       if (!kitChannel.has(s.program) && kitChannel.size < drumChannels.length) kitChannel.set(s.program, drumChannels[kitChannel.size]);
       if (kitChannel.has(s.program)) byStaffId.set(s.id, kitChannel.get(s.program));

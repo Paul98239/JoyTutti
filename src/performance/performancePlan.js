@@ -1,10 +1,10 @@
 // performancePlan.js — 演奏計畫：樂譜＋指派 → 譜表（staff：發聲與輸出 channel 的單位）、每位演奏者一份計畫、伴奏一份計畫、總音數與 hold 容差上限。載入、改指派時重建，之後不變；
-// 游標、錨點、佇列這些執行期狀態在 scheduler.js。一個 MuseScore 樂器是一個 part，底下有一個以上 staff（鋼琴兩行譜＝兩個）；指派以 part 為單位，發聲與輸出 channel 以 staff 為單位。
+// 游標、錨點、佇列這些執行期狀態在 scheduler.js。一個 part 底下有一個以上 staff（鋼琴兩行譜＝兩個；切分規則見 parts.js）；指派以 part 為單位，發聲與輸出 channel 以 staff 為單位。
 // 控制器屬於輸入 channel（parser 的 channelLanes），扇出到所有來源是該 channel 的譜表（lanes），再依擁有者拆給演奏者或伴奏；播放中途的控制器跟音一樣依起音切段。
 
 import { rateBoundsFor } from './tempo.js';
 import { holdCapTicksFor, holdGapTolerance } from './voices.js';
-import { byFileOrder, GM_DEFAULT_MIXER, BANK_MSB_RHYTHM } from '../midi/midiParser.js';
+import { byFileOrder, GM_DEFAULT_MIXER, isPercussionBank } from '../midi/midiParser.js';
 
 // 一個 part 的 staff 規格：沒有 staves 的 part（手工組的舊資料形狀）視為單一 staff，id 沿用 part.id
 export function staffSpecsOf(part) {
@@ -71,9 +71,9 @@ function buildStaves(score, assignments, router) {
   return { staves, unplaced };
 }
 
-// 播放中途的 bank select 若會讓輸出 channel 在打擊與旋律之間互換（打擊的判定同 parser：bank MSB 120），不送到這個譜表：
+// 播放中途的 bank select 若會讓輸出 channel 在打擊與旋律之間互換（打擊的判定同 parser 的 isPercussionBank()：MSB 120／121 才改變角色，其他值不變），不送到這個譜表：
 // 輸出 channel 是依打擊／旋律分配的，中途互換要重新分配（不做，見 buildControls 的警告）。
-export const switchesKit = (staff, ev) => ev.type === 'controlChange' && ev.data1 === 0 && (ev.value === BANK_MSB_RHYTHM) !== staff.percussionKit;
+export const switchesKit = (staff, ev) => ev.type === 'controlChange' && ev.data1 === 0 && isPercussionBank(ev.value, staff.sourceChannel) !== staff.percussionKit;
 
 // 狀態補送（chase）不送 tick 0 的 bank select／program change：tick 0 的音色是初始音色的事（staff.program／bank），從控制器軌重送可能矛盾
 const isPatchEvent = (ev) => ev.type === 'programChange' || (ev.type === 'controlChange' && (ev.data1 === 0 || ev.data1 === 32));

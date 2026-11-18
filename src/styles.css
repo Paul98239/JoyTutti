@@ -10,39 +10,46 @@
 @layer base {
 
 :root {
-  --bg: #060608;
-  --panel-bg: #0c0c10;       /* 深底，浮在攝影機畫面上對比強 */
-  --border: #5a5a68;         /* 亮到區塊邊界看得清 */
-  --border-light: #86868f;
-  --accent: #fde047;         /* 亮黃，疊在深底上跳出來 */
-  --text: #ffffff;
-  --text-dim: #f4f6fb;       /* 次要文字也要亮 */
-  --text-muted: #c3c4cf;     /* 最小的 meta 文字也要讀得清 */
+  /* 暖色系：底是深的暖棕、強調色是蜂蜜琥珀、文字是奶油白。WCAG 對比：--text 在 --panel-bg 上 15.5:1、--on-accent 在 --accent 上 10.6:1（2026-11-18 用公式算，計算見任務 3 報告） */
+  --bg: #1a120e;
+  --field-bg: #22170f;       /* 輸入框、下拉、清單列：比面板再深一階的暖棕（不是純黑） */
+  --panel-bg: #2a1d16;       /* 暖深棕，浮在舞台上對比夠 */
+  --panel-glass: rgba(42, 29, 22, 0.9);   /* 頂端兩條浮動工具列漸層的下端 */
+  --border: #6e5646;         /* 亮到區塊邊界看得清 */
+  --border-light: #a48a75;
+  --accent: #ffc46b;         /* 蜂蜜琥珀：「播放中」「開著」「已經播到這裡」 */
+  --accent-2: #ff9a76;       /* 珊瑚橘：進度條漸層的尾端 */
+  --text: #fff8f0;
+  --text-dim: #fbeee0;       /* 次要文字也要亮 */
+  --text-muted: #e2cdb8;     /* 最小的 meta 文字也要讀得清 */
 
   /* 按鈕與面板的共用皮膚：所有按鈕（.btn）與深色面板都吃這幾個，不寫死字面值 */
-  --btn-bg: #2a2a30;
-  --btn-bg-hover: #3a3a42;
-  --on-accent: #000;         /* 疊在 accent 黃底上的文字色 */
-  --danger: #ff6b6b;
-  --danger-border: #b91c1c;
+  --btn-bg: #3d2d23;
+  --btn-bg-hover: #523d30;
+  --on-accent: #2b1a0c;      /* 疊在 accent 琥珀底上的文字色 */
+  --danger: #ff8a7a;
+  --danger-border: #c2412f;
   --line: 1.5px;             /* 元件邊框粗細 */
-  --shadow-sm: 0 4px 14px rgba(0, 0, 0, .5);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, .55);
-  --shadow-lg: 0 16px 40px rgba(0, 0, 0, .7);
+  --shadow-sm: 0 4px 14px rgba(12, 5, 0, .45);
+  --shadow-md: 0 10px 28px rgba(12, 5, 0, .5), 0 0 0 1px rgba(255, 214, 170, .05);
+  --shadow-lg: 0 18px 44px rgba(12, 5, 0, .6);
   --dur-fast: .15s;          /* 按鈕 hover／狀態切換 */
-  --dur-base: .2s;           /* 頂端浮動 UI 的淡化 */
-  --idle-opacity: .35;       /* 頂端浮動 UI 沒碰到時的透明度：播放中手不會碰滑鼠，UI 幾乎永遠停在這個淡度，要保留淡出感但不能淡到看不清 */
+  --dur-base: .25s;          /* 頂端浮動 UI 的淡化 */
+  /* 頂端浮動 UI 沒碰到時的透明度：播放中手不會碰滑鼠，UI 幾乎永遠停在這個淡度，要保留淡出感但不能淡到看不清。
+     0.4 時歌名、按鈕文字對各自底色約 3.3:1（舞台中央最亮處，公式計算，見任務 3 報告；舊值 .35 約 2.7:1） */
+  --idle-opacity: .4;
 
   /* 浮動 UI 的基準字級；實際值由 src/ui.js 的 applyUiFontSize() 執行期覆寫＝f(視窗實際像素寬) ÷ 瀏覽器縮放倍率，所以 Ctrl +/− 縮放時 UI 視覺大小不變；16px 只是 JS 尚未執行前的靜態退路 */
   --ui-fs: 16px;
   /* 選歌彈出面板的高度上限；實際值由 src/ui.js 的 applyPopupMaxHeight() 量測 #camera-frame 動態覆寫，70vh 只是靜態退路 */
   --popup-max-height: 70vh;
 
-  /* 圓角三個層級：圓形（播放鈕／把手／spinner）、大容器（彈出面板／舞台提示）、小控制項（工作列按鈕／下拉／輸入框／浮動小方塊／清單列，含工作列外殼）。
+  /* 圓角三個層級：圓形（播放鈕／把手／spinner）、大容器（彈出面板／舞台提示）、小控制項（工作列按鈕／下拉／輸入框／浮動小方塊／清單列）；另有頂端工具列外殼用的膠囊形。
      原生 <select> 展開後的選項清單是方形，膠囊形收合框跟它反差太大，所以小控制項統一小圓角 */
   --radius-circle: 50%;
-  --radius-lg: 0.7em;
-  --radius-sm: 0.45em;
+  --radius-lg: 1em;
+  --radius-sm: 0.6em;
+  --radius-pill: 999px;      /* 頂端兩條工具列與進度條的外殼：圓潤的膠囊形 */
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -50,8 +57,9 @@
 body, html {
   width: 100%; height: 100%;
   overflow: hidden;
-  background: #000;
-  font-family: system-ui, sans-serif;
+  background: #120b08;       /* 非 16:9 螢幕時 #camera-frame 兩側露出的顏色：比舞台再暗一階的暖棕 */
+  /* 繁體中文優先用作業系統內建的字體，不另外下載字型 */
+  font-family: system-ui, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
 }
 
 }
@@ -70,7 +78,7 @@ body, html {
 }
 
 /* App shell：置中一個固定比例的攝影機方框。
-   #app-shell 佔滿視窗、用 flex 把 #camera-frame 置中；背景透明，非 16:9 螢幕的黑邊直接是 body 的 #000。 */
+   #app-shell 佔滿視窗、用 flex 把 #camera-frame 置中；背景透明，非 16:9 螢幕的兩側直接是 body 的底色。 */
 #app-shell {
   position: relative;
   z-index: 1;
@@ -83,14 +91,15 @@ body, html {
 }
 
 /* 「視窗裝得下的最大 16:9 方框」：寬度取「視窗寬」與「視窗高 × 16/9」的較小者，aspect-ratio 由寬度推出高度；鎖 16:9 讓 F11 進出全螢幕時只是等比例縮放，框內 object-fit:cover 每次裁切都一致。
-   不用 max-width/max-height + aspect-ratio：在 flex 版面裡兩軸都沒有定值會整個塌成 0 高。只留 1px 細線界定畫面與黑邊。 */
+   不用 max-width/max-height + aspect-ratio：在 flex 版面裡兩軸都沒有定值會整個塌成 0 高。只留 1px 很淡的暖色細線與小圓角界定畫面與兩側。 */
 #camera-frame {
   position: relative;      /* #stage-hint 以此為定位基準；頂端 pill／控制列在框外的 #top-center-stack */
   width: min(100vw, 100vh * 16 / 9);
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  border: 1px solid var(--border-light);
-  background: #000;
+  border: 1px solid rgba(255, 214, 170, .14);
+  border-radius: 0.6em;
+  background: var(--bg);
 }
 
 /* 頂端置中疊層：播放 pill 在上、系統控制／選歌控制列在下。
@@ -111,7 +120,8 @@ body, html {
 /* 系統控制／選歌橫排一列，外殼跟播放 pill 同一組樣式變數，視覺上是同一家族的頂端工具列。橫排而非直排：直排時選歌的彈出面板往下展開會蓋住下面其他觸發鈕（.tl-popup z-index:60 高於同層的 .tl-trigger）。
    max-width 是 flex-wrap 真的能換行的必要條件：position:fixed 元素預設內容多寬就多寬，沒有上限的話窄視窗下按鈕會直接超出畫面右緣而不是換行。
    position:relative：這個容器是 .tl-popup 定位的參照對象（見 .tl-popup），不是外層的 #top-center-stack。
-   整條高度是被內部按鈕（.tl-text-btn／.tl-trigger／.tl-select）的 padding 撐出來的，外殼 padding 只是最後一步。border-radius 跟內部元件同一個 --radius-sm，不要有內外兩種圓角語彙。 */
+   整條高度是被內部按鈕（.tl-text-btn／.tl-trigger／.tl-select）的 padding 撐出來的，外殼 padding 只是最後一步。外殼是膠囊形（--radius-pill）、內部元件是 --radius-sm：跟播放 pill 同一套外殼語彙。
+   背景是上亮下暗的半透明暖棕漸層＋很淡的暖色細邊。 */
 .control-row {
   position: relative;
   display: flex;
@@ -122,10 +132,10 @@ body, html {
   gap: 0.5em;
   max-width: min(92vw, 40em);
   font-size: var(--ui-fs);
-  padding: 0.3em 0.6em;
-  background: var(--panel-bg);
-  border: var(--line) solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: 0.35em 0.8em;
+  background: linear-gradient(180deg, rgba(58, 41, 31, .92), var(--panel-glass));
+  border: 1px solid rgba(255, 214, 170, .18);
+  border-radius: var(--radius-pill);
   box-shadow: var(--shadow-md);
 }
 
@@ -171,7 +181,7 @@ body, html {
   flex-shrink: 0;
   font-size: var(--ui-fs); font-weight: 700; font-family: inherit;
   padding: 0.3em 0.65em; border-radius: var(--radius-sm);
-  border: var(--line) solid var(--border-light); background: var(--bg);
+  border: var(--line) solid var(--border-light); background: var(--field-bg);
   color: var(--text); outline: none;
   box-shadow: var(--shadow-sm);
 }
@@ -263,7 +273,8 @@ body, html {
    歌名完整顯示、不可用省略號截斷：pill 用 width:max-content 跟著內容變寬，只有 max-width 攔住。max-width 沿用 #camera-frame 的寬度公式（min(100vw, 100vh*16/9)），
    pill 最寬就是攝影機外框的寬度，天生不會超出外框，不用 JS 同步兩個元素的寬度。歌名預設單行（.player-status-bar 的 white-space:nowrap），太長時由 --song-title-scale 縮小字級，
    縮到下限還放不下才退回換行（見 .player-status-bar 與 src/midi/midiPlayer.js 的 fitSongTitle()）。
-   跟控制列（.control-row）不會互相遮蔽是結構保證的：兩者垂直分層、水平都置中，max-width 不必依控制列有沒有面板展開動態收緊。border-radius 同控制列與其內部元件的 --radius-sm。 */
+   跟控制列（.control-row）不會互相遮蔽是結構保證的：兩者垂直分層、水平都置中，max-width 不必依控制列有沒有面板展開動態收緊。外殼同控制列：膠囊形、上亮下暗的半透明暖棕漸層；
+   左內距比右邊小，圓形按鈕貼近膠囊的圓頭。 */
 .toolbar-playback {
   font-size: var(--ui-fs);
   display: flex;
@@ -272,31 +283,34 @@ body, html {
   position: relative; z-index: 1;   /* 按鈕的滑鼠提示會往下蓋到控制列上，要疊在它之上（面板 z-index 60 仍更高） */
   width: max-content;
   max-width: min(100vw, 100vh * 16 / 9);
-  padding: 0.3em 0.9em;
-  background: var(--panel-bg);
-  border: var(--line) solid var(--border);
-  border-radius: var(--radius-sm);
+  padding: 0.35em 1.1em 0.35em 0.45em;
+  background: linear-gradient(180deg, rgba(58, 41, 31, .94), var(--panel-glass));
+  border: 1px solid rgba(255, 214, 170, .2);
+  border-radius: var(--radius-pill);
   box-shadow: var(--shadow-md);
 }
 
 /* 頂端進度條：獨立於播放 pill，純視覺。
-   寬度沿用 #camera-frame 的寬度公式，並用 left:50%+translateX(-50%) 置中，與 #app-shell 置中的外框水平中心對齊、左右邊緣切齊，不用 JS 量測（同 .toolbar-playback 的 max-width）。
-   顏色：未播部分＝--border（同 pill 邊框的灰），已播部分＝--accent（同「播放中」「面板開啟」的黃）。
+   寬度沿用 #camera-frame 的寬度公式再左右各內縮 0.6em，並用 left:50%+translateX(-50%) 置中，與 #app-shell 置中的外框水平中心對齊，不用 JS 量測（同 .toolbar-playback 的 max-width）。
+   離上緣 0.3em、膠囊形。顏色：未播部分＝很淡的奶油色，已播部分＝--accent 到 --accent-2 的漸層（琥珀到珊瑚，像一條暖色的光）。
    不掛任何 hover 淡化規則是刻意的：它是一眼帶過的進度指示，不該要先把滑鼠移過去才看得到。 */
 .top-progress-bar {
   position: fixed;
-  top: 0; left: 50%;
+  top: 0.3em; left: 50%;
   transform: translateX(-50%);
   z-index: 51; /* 在 #top-center-stack（50）之上一層，永遠可見，不被疊層蓋住 */
   font-size: var(--ui-fs); /* 粗細用 em，要跟其他浮動元件同一套縮放基準，不吃 body 字級 */
   appearance: none; -webkit-appearance: none; border: 0;
-  width: min(100vw, 100vh * 16 / 9);
-  height: 0.35em;
-  background: var(--border);
+  width: calc(min(100vw, 100vh * 16 / 9) - 1.2em);
+  height: 0.42em;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: rgba(255, 226, 196, .16);
+  box-shadow: 0 0 0 1px rgba(255, 214, 170, .08), 0 2px 10px rgba(12, 5, 0, .4);
 }
 .top-progress-bar::-webkit-progress-bar { background: transparent; }
-.top-progress-bar::-webkit-progress-value { background: var(--accent); }
-.top-progress-bar::-moz-progress-bar { background: var(--accent); }
+.top-progress-bar::-webkit-progress-value { background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: var(--radius-pill); box-shadow: 0 0 10px rgba(255, 170, 100, .55); }
+.top-progress-bar::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: var(--radius-pill); }
 
 /* 播放 pill 與控制列各自獨立淡化，純 CSS :hover／:has()／:focus-within，沒有 JS 計時器、沒有延遲：碰到（或鍵盤焦點進去）就顯示，沒碰到立刻淡化，兩者互不牽動。
    還沒有能播放的歌曲之前（播放 pill 帶 is-empty：idle／載入中），控制列常駐不淡出——這時它是唯一的操作入口，要先看得到「選歌」按鈕在哪；選好歌之後控制列回到 hover 才顯示，換播放 pill 常駐不淡出，
@@ -331,7 +345,7 @@ body, html {
   display: grid;
   place-items: center;
   overflow: hidden;
-  background: #000;
+  background: var(--bg);
 }
 
 /* 舞台中央的提示（攝影機關閉／還沒選現場人數）。
@@ -376,21 +390,26 @@ body, html {
 /* 永久黑幕：攝影機畫面刻意永遠不顯示（鏡頭與追蹤仍在背景運作，見 vision.js）。
    沒有任何切換方式。z-index 蓋過 #gl-canvas（沒設 z-index，隱含 0）但蓋不過 #overlay-canvas
    （z-index:1）——只蓋攝影機畫面，骨架要畫在黑幕之上；同時仍在 #stage-hint（z-index 2）之下，
-   讓「請選擇現場人數」之類的提示文字還是看得到。 */
+   讓「請選擇現場人數」之類的提示文字還是看得到。
+   顏色不是純黑，是暖色的舞台（三層不透明度不同的放射漸層，由上到下疊）：地板一圈琥珀色的光、上方一盞柔和的聚光、整體中間亮四角暗；
+   最底那層是不透明色，所以仍完全蓋住攝影機畫面。 */
 #stage-blackout {
   position: absolute;
   top: 0; left: 0;
   width: 100%;
   height: 100%;
   z-index: 0;
-  background: #000;
+  background:
+    radial-gradient(60% 34% at 50% 100%, rgba(255, 168, 92, .16), transparent 72%),
+    radial-gradient(70% 60% at 50% 8%, rgba(255, 206, 150, .10), transparent 70%),
+    radial-gradient(130% 100% at 50% 40%, #2c1d15 0%, #1d130e 55%, #110a07 100%);
 }
 
 /* 載入遮罩：z-index 100 只管視覺上蓋住整個 app；開機期間點不到、Tab 不到底下的控制項是 #app-shell 的
    inert 屬性在擋（見 index.html），不靠這裡接住 pointer event。 */
 #loading-overlay {
   position: fixed; inset: 0;
-  background: #000;
+  background: radial-gradient(90% 80% at 50% 40%, #2c1d15 0%, #150d09 100%);   /* 跟舞台同一組暖棕，收起時不會從黑閃到棕 */
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -402,8 +421,8 @@ body, html {
 
 .spinner {
   width: 48px; height: 48px;
-  border: 4px solid rgba(0, 255, 255, .15);
-  border-top-color: #0ff;
+  border: 4px solid rgba(255, 196, 107, .18);
+  border-top-color: var(--accent);
   border-radius: var(--radius-circle);
   animation: spin .8s linear infinite;
 }
@@ -448,7 +467,7 @@ body, html {
 .player-input {
   box-sizing: border-box; width: 100%;
   padding: 0.55em 0.65em; border-radius: var(--radius-sm);
-  border: var(--line) solid var(--border-light); background: var(--bg);
+  border: var(--line) solid var(--border-light); background: var(--field-bg);
   color: var(--text); font-size: 1em; outline: none;
   transition: border-color var(--dur-base);
 }
@@ -526,7 +545,7 @@ body, html {
    依實際文字寬度算出，放不進一行就縮小字級；縮到下限（MIN_SONG_TITLE_SCALE）還放不下，才由 JS 加 .allow-wrap 退回換行。 */
 .player-status-bar {
   font-size: calc(1em * var(--song-title-scale, 1));
-  color: var(--text-dim); font-weight: 700;
+  color: var(--text-dim); font-weight: 700; letter-spacing: 0.02em;
   white-space: nowrap; overflow-wrap: normal;
   flex: 1 1 auto; min-width: 0;
   line-height: 1.35;
@@ -559,7 +578,7 @@ body, html {
 .score-part-row {
   display: flex; align-items: center; gap: 0.6em;
   padding: 0.6em; border-radius: var(--radius-sm);
-  background: var(--bg); border: 1px solid var(--border);
+  background: var(--field-bg); border: 1px solid var(--border);
   flex-shrink: 0;
   transition: border-color var(--dur-fast), background var(--dur-fast);
 }
@@ -631,7 +650,7 @@ body, html {
   position: absolute; left: calc(var(--line) + 0.65em); right: 2.2em; top: 50%; transform: translateY(-50%);
   pointer-events: none; color: var(--text); font: inherit;
 }
-.select-mq:has(select:disabled) > .mq { color: color-mix(in srgb, var(--text) 35%, var(--bg)); }
+.select-mq:has(select:disabled) > .mq { color: color-mix(in srgb, var(--text) 35%, var(--field-bg)); }
 
 }
 

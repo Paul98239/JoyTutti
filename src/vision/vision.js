@@ -36,12 +36,22 @@ export function warmPoseModel() {
 // 推論放在 Worker：detectForVideo 是同步的、會卡住呼叫它的執行緒（官方文件），放在主執行緒時按鍵、按鈕與伴奏排程都要排隊等它。
 
 const POSE_COLORS = ["#00FFFF", "#FF6B6B", "#51CF66", "#FFD43B"]; // 4 人的代表色彩（依鎖定槽位對應）
-const BONE_WIDTH = 2;      // 骨架連線寬度（px）
-const JOINT_RADIUS = 2;    // 關節圓點半徑（px）
+// 骨架的粗細跟著這個人在畫面上的大小（sc＝track.scale × 畫面寬，像素，見 renderSkeletonOverlay）縮放；下面兩個是人很小時的下限（px）
+const BONE_WIDTH = 2;      // 骨架實線寬度的下限
+const JOINT_RADIUS = 2;    // 關節圓點半徑的下限
+const BONE_WIDTH_RATIO = 0.035;   // 實線寬度＝sc × 這個比例
+const JOINT_RADIUS_RATIO = 0.9;   // 關節半徑＝實線寬度 × 這個比例
+const SCALE_MIN_PX = 20;          // sc 的下限（px）：剛鎖定、尺度還很小時不讓頭與線縮成一點
+// 骨頭先畫一層寬而淡的光暈再畫實線（不用 shadowBlur：那是逐像素模糊，每幀畫很貴）。數字取自視覺參考 md（docs/JoyTutti_doc/視覺參考-骨架-頂端UI-背景.md）去掉表情活力項的部分，是外觀選擇、沒有量測依據
+const GLOW_WIDTH_RATIO = 2.6;     // 光暈寬度＝實線寬度 × 這個比例
+const GLOW_ALPHA = 0.16;
+const HEAD_RADIUS = 0.32;         // 頭的圓（鼻子為中心）半徑＝sc × 這個比例
+const HEAD_FILL_ALPHA = 0.14;
 const TAU = Math.PI * 2;
-// 嘴巴中點正下方的虛擬「下巴」節點偏移量：以肩寬為單位（同 ArcDetector 門檻、ID 標籤字級的慣例），人離鏡頭遠近不同時比例才一致。
-// 原本 0.18 是在混合單位下訂的（肩寬以畫面寬、往下的距離以畫面高為單位），2026-10-28 換成同一把尺時乘上 16:9 的 0.5625，畫出來的位置不變
-const CHIN_OFFSET_RATIO = 0.10;
+// 光暈與頭的填色：每幀都要用，模組載入時先組好字串，不在每幀拼
+const rgbaOf = (hex, a) => `rgba(${parseInt(hex.slice(1, 3), 16)},${parseInt(hex.slice(3, 5), 16)},${parseInt(hex.slice(5, 7), 16)},${a})`;
+const POSE_GLOW_COLORS = POSE_COLORS.map((c) => rgbaOf(c, GLOW_ALPHA));
+const POSE_HEAD_FILLS = POSE_COLORS.map((c) => rgbaOf(c, HEAD_FILL_ALPHA));
 
 const FRAME_ERROR_THRESHOLD = 90; // 連續幾幀處理失敗才判定為持續性錯誤並顯示錯誤畫面（約 1.5~3 秒）
 
@@ -370,17 +380,7 @@ function virtualNeckPoint(lm) {
   return { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2 };
 }
 
-// 嘴巴兩節點中點下方的虛擬「下巴」節點，供骨架畫成倒三角形（見 renderSkeletonOverlay()）。shoulderWidth 以畫面寬為單位，往下的距離除以 aspect 換回以畫面高為單位。
-function virtualChinPoint(lm, shoulderWidth, aspect) {
-  const left = lm[9], right = lm[10];
-  if (!(left.visible ?? true) || !(right.visible ?? true)) return null;
-  return {
-    x: (left.x + right.x) / 2,
-    y: (left.y + right.y) / 2 + CHIN_OFFSET_RATIO * shoulderWidth / aspect,
-  };
-}
-
-// 精簡骨架只畫手臂鏈（肩-肘-手腕-手掌）＋臉部簡化輪廓，不畫全身連線（髖／膝／踝／腳掌沒有被任何手勢或播放邏輯讀取）。
+// 精簡骨架只畫手臂鏈（肩-肘-手腕-手掌）＋頭一個圓，不畫全身連線（髖／膝／踝／腳掌沒有被任何手勢或播放邏輯讀取）。
 // 手照 MediaPipe 原本的節點與連線（POSE_CONNECTIONS 的手部那幾條）：手腕、小指、食指、拇指各一點，兩隻手都畫。
 const ARM_CONNECTIONS = [
   [MP_LEFT_SHOULDER, MP_LEFT_ELBOW], [MP_RIGHT_SHOULDER, MP_RIGHT_ELBOW],
@@ -388,10 +388,10 @@ const ARM_CONNECTIONS = [
   [14, 16], [16, 18], [16, 20], [16, 22], [18, 20],
 ];
 const ARM_JOINTS = [MP_LEFT_SHOULDER, MP_RIGHT_SHOULDER, MP_LEFT_ELBOW, MP_RIGHT_ELBOW, 15, 16, 17, 18, 19, 20, 21, 22];
-// 臉部只標關鍵五官：雙眼（2/5）、鼻子（0）各畫一個獨立節點、不連線；嘴巴兩節點（9/10）加上虛擬下巴節點（virtualChinPoint()）連成倒三角形。
-const MOUTH_PAIR = [9, 10];
+const MP_NOSE = 0;
 
 // 2D 覆蓋層繪製骨架：依鎖定槽位上色，同一人跨幀顏色不變。
+// 每個人四次繪圖：骨頭光暈（stroke）→ 頭的填色（fill）→ 骨頭實線＋頭的外框（同一條 Path2D 一次 stroke）→ 關節（fill）。
 function renderSkeletonOverlay(activeTracks) {
   const W = overlayCanvas.width;
   const H = overlayCanvas.height;
@@ -402,16 +402,21 @@ function renderSkeletonOverlay(activeTracks) {
   ctx2d.save();
   ctx2d.translate(W, 0);
   ctx2d.scale(-1, 1); // 水平鏡像（與 WebGL shader 一致）
+  ctx2d.lineCap = "round";   // 光暈線很寬，平頭的話線段端點會切成方塊
+  ctx2d.lineJoin = "round";
 
   for (const track of activeTracks) {
-    const color = POSE_COLORS[track.slot % POSE_COLORS.length];
+    const colorIndex = track.slot % POSE_COLORS.length;
+    const color = POSE_COLORS[colorIndex];
 
     // 低可見度（遮擋/猜測）的關節不繪製。visible 由 tracking.js 算好（可見度先 EMA 平滑、再套遲滯門檻），這裡不自己比門檻，否則邊緣關節會逐幀閃爍。骨架累積成 Path2D 後一次畫完，不用 DrawingUtils 逐條逐點畫。
     const lm = track.smoothed;
     const ls = lm[MP_LEFT_SHOULDER], rs = lm[MP_RIGHT_SHOULDER];
-    const shoulderWidth = Math.hypot(ls.x - rs.x, (ls.y - rs.y) * track.aspect);
+    // 粗細的尺：track.scale（tracking.js 的 bodyScaleOf：正面時是肩寬、側身時改用軀幹長，以畫面寬為單位，逐幀 EMA 過），不用這一幀的肩寬，側身與抖動時線寬才不會忽粗忽細
+    const sc = Math.max(SCALE_MIN_PX, track.scale * W);
+    const core = Math.max(BONE_WIDTH, sc * BONE_WIDTH_RATIO);
     const neck = virtualNeckPoint(lm);
-    const chin = virtualChinPoint(lm, shoulderWidth, track.aspect);
+    const nose = lm[MP_NOSE];
 
     const bones = new Path2D();
     for (const [a, b] of ARM_CONNECTIONS) {
@@ -424,35 +429,42 @@ function renderSkeletonOverlay(activeTracks) {
       bones.moveTo(ls.x * W, ls.y * H); bones.lineTo(neck.x * W, neck.y * H);
       bones.moveTo(rs.x * W, rs.y * H); bones.lineTo(neck.x * W, neck.y * H);
     }
-    if (chin) {
-      const mLeft = lm[MOUTH_PAIR[0]], mRight = lm[MOUTH_PAIR[1]];
-      bones.moveTo(mLeft.x * W, mLeft.y * H); bones.lineTo(mRight.x * W, mRight.y * H);
-      bones.moveTo(mRight.x * W, mRight.y * H); bones.lineTo(chin.x * W, chin.y * H);
-      bones.moveTo(chin.x * W, chin.y * H); bones.lineTo(mLeft.x * W, mLeft.y * H);
-    }
-    ctx2d.strokeStyle = color;
-    ctx2d.lineWidth = BONE_WIDTH;
+    // 光暈只畫骨頭，頭的外框不加（之後才併進同一條 Path2D）
+    ctx2d.strokeStyle = POSE_GLOW_COLORS[colorIndex];
+    ctx2d.lineWidth = core * GLOW_WIDTH_RATIO;
     ctx2d.stroke(bones);
 
-    // 關節點：手臂鏈（含手腕與手掌三點）、脖子、下巴；雙眼與鼻子各畫一個獨立節點、不連線。
+    // 頭：以鼻子為中心的一個圓，取代五官的點與嘴巴三角形——黑幕上只有骨架，細碎的點只會讓畫面亂。淡淡的填色先畫、外框跟骨頭實線一起畫
+    if (nose.visible ?? true) {
+      const hx = nose.x * W, hy = nose.y * H, hr = sc * HEAD_RADIUS;
+      ctx2d.beginPath();
+      ctx2d.arc(hx, hy, hr, 0, TAU);
+      ctx2d.fillStyle = POSE_HEAD_FILLS[colorIndex];
+      ctx2d.fill();
+      // arc 從角度 0（圓的右端）起筆，先 moveTo 過去，否則會從上一段骨頭拉一條線過來
+      bones.moveTo(hx + hr, hy);
+      bones.arc(hx, hy, hr, 0, TAU);
+    }
+    ctx2d.strokeStyle = color;
+    ctx2d.lineWidth = core;
+    ctx2d.stroke(bones);
+
+    // 關節點：手臂鏈（含手腕與手掌三點）、脖子
     const joints = new Path2D();
-    const addJoint = (x, y, radius) => {
-      // arc 從角度 0（圓的右端）起筆，先 moveTo 過去，否則會從上一個圓拉一條線過來
-      joints.moveTo(x + radius, y);
-      joints.arc(x, y, radius, 0, TAU);
+    const jr = Math.max(JOINT_RADIUS, core * JOINT_RADIUS_RATIO);
+    const addJoint = (x, y) => {
+      // 同上：先 moveTo 到圓的右端
+      joints.moveTo(x + jr, y);
+      joints.arc(x, y, jr, 0, TAU);
     };
-    // 0=鼻子、2=左眼中心、5=右眼中心、9/10=嘴角（見 MOUTH_PAIR）。
-    for (const i of [...ARM_JOINTS, 0, 2, 5, MOUTH_PAIR[0], MOUTH_PAIR[1]]) {
+    for (const i of ARM_JOINTS) {
       const p = lm[i];
       if (!(p.visible ?? true)) continue;
-      addJoint(p.x * W, p.y * H, JOINT_RADIUS);
+      addJoint(p.x * W, p.y * H);
     }
-    if (neck) addJoint(neck.x * W, neck.y * H, JOINT_RADIUS);
-    if (chin) addJoint(chin.x * W, chin.y * H, JOINT_RADIUS);
+    if (neck) addJoint(neck.x * W, neck.y * H);
     ctx2d.fillStyle = color;
     ctx2d.fill(joints);
-    ctx2d.lineWidth = 1;
-    ctx2d.stroke(joints);
   }
 
   ctx2d.restore();

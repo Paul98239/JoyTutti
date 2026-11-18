@@ -1,13 +1,13 @@
 // midiParser.js — 解析入口與資料型別，對外唯一出口：呼叫端一律只 import 這個檔。parseMidi(await file.arrayBuffer())；
-// parsed.parts＝聲部（MuseScore 一個樂器＝一個 part，底下是 staff＝譜表 × channel），parsed.segments＝全曲垂直切片（scheduler.js 一次觸發放行一個），parsed.notes＝連同 parts 建立 staff。
+// parsed.parts＝聲部（可指派的單位，底下是 staff＝有音符的 (track, 絕對 channel)；切分規則見 parts.js），parsed.segments＝全曲垂直切片（scheduler.js 一次觸發放行一個），parsed.notes＝連同 parts 建立 staff。
 // 分層（每層只依賴下面的層）：midiFile.js 讀檔 → timeline.js 時間（速度表、tick ↔ 秒、拍號／調號、port 偏移、格線）→ parts.js（名稱表、聲部切分、音符配對、控制器軌／系統軌／文字軌、控制器狀態與 chase）；本檔依序呼叫各層並轉出它們的名稱。
 
 import { makeWarn, readSmf, findLastVoiceEventTick } from './midiFile.js';
 import { buildTempoMap, makeMidiTicksToSeconds, makeSecondsToMIDITicks, buildTimeSignatures, buildKeySignatures, buildPortOffsets } from './timeline.js';
-import { buildProgramResolver, collectPartsAndNotes, collectChannelLanes, collectSystemEvents, collectTextEvents } from './parts.js';
+import { collectPartsAndNotes, collectChannelLanes, collectSystemEvents, collectTextEvents } from './parts.js';
 
 export { META, MidiParseError } from './midiFile.js';
-export { gmProgramNameZh, midiNoteName, ChannelStateTracker, controllerStateAt, chaseEventsAt, byFileOrder } from './parts.js';
+export { gmProgramNameZh, midiNoteName, ChannelStateTracker, controllerStateAt, chaseEventsAt, byFileOrder, isPercussionBank } from './parts.js';
 export { CC, DRUM_CHANNEL, BANK_MSB_RHYTHM, BANK_MSB_MELODY, PITCH_BEND_CENTER, RESET_CC, PARAMETER_CC, GM_DEFAULT_MIXER } from './parts.js';
 export { buildMeasureGrid, buildBeatGrid } from './timeline.js';
 
@@ -92,7 +92,7 @@ export function buildSegments(notes) {
  * 一顆音（note-on 配對到 note-off 之後的結果），由 collectNotes() 產生。
  * @typedef {object} MidiNote
  * @property {string} id  「軌序號:note on 在該軌事件清單的序號」：同一版 parser 解析同一個檔一定相同（官方 timeline 的 {tr, ev}）
- * @property {string} partId  所屬 part（MuseScore 的一個樂器）
+ * @property {string} partId  所屬 part
  * @property {string} staffId  所屬 staff（一個譜表 × 一個樂器 channel）
  * @property {number} trackIndex
  * @property {number} eventIndex  note on 在 tracks[trackIndex].events 的序號
@@ -108,18 +108,18 @@ export function buildSegments(notes) {
  */
 
 /**
- * 一個 staff ＝ 組內一個「有音符的 (track, channel)」：一個譜表 × 一個樂器 channel（排程單位）。
+ * 一個 staff ＝ 一個「有音符的 (track, 絕對 channel)」（排程與輸出 channel 的單位）。
  * @typedef {object} MidiStaff
  * @property {string} id  t{trackIndex}c{絕對 channel}
  * @property {string} partId
  * @property {number} trackIndex
  * @property {number} channel  絕對 channel（含 port 偏移）
- * @property {number} program  GM program：有初始化區塊用 tick 0 的值，沒有就依時間軸查詢（預設 0）
- * @property {{msb:number, lsb:number}} bank  Bank Select；檔案從未送過就是 GM2 §3.3.1 的規格預設值
+ * @property {number} program  GM program：第一顆音那個 tick 生效的值（自己軌優先、再查全曲同一個絕對 channel；都沒送過是 0）
+ * @property {{msb:number, lsb:number}} bank  第一顆音那個 tick 生效的 Bank Select（查法同 program）；檔案從未送過就是 GM2 §3.3.1 的規格預設值
  *   （第 10 個 channel 為 120/0 節奏，其餘為 121/0 旋律）
- * @property {boolean} percussionKit  bank MSB 是否為 120（GM2 §2.4：任何 channel 都可以切成節奏通道）
+ * @property {boolean} percussionKit  打擊（parts.js 的 isPercussionBank()）：bank MSB 120 是、121 不是，其他或沒送依是不是第 10 個 channel（GM1；GM2 §2.4／§3.3.1）
  * @property {{volume:number, pan:number, reverb:number, chorus:number}|null} init
- *   tick 0 的混音初始化（CC7／10／91／93，缺的補 GM 預設）；沒有初始化區塊是 null（下游用 GM 預設 100／64／0／0）
+ *   這個絕對 channel 在 tick 0 的混音初始化（CC7／10／91／93，不分哪一軌送的，缺的補 GM 預設）；tick 0 都沒送是 null（下游用 GM 預設 100／64／0／0）
  * @property {number} noteCount
  * @property {number} startTick
  * @property {number} endTick
@@ -135,10 +135,10 @@ export function buildSegments(notes) {
  */
 
 /**
- * 一個聲部（part）＝ MuseScore 的一個樂器，可指派的單位；底下有一個以上的 staff（鋼琴兩行譜是兩個 staff）。
+ * 一個聲部（part）＝ 可指派的單位；底下有一個以上的 staff（同一個絕對 channel 的 staff 一定在同一個 part，例如鋼琴兩行譜）。
  * 切分規則見 parts.js 的「聲部切分」說明。
  * @typedef {object} MidiPart
- * @property {string} id  p{首軌的 track 序號}
+ * @property {string} id  p{第一個 staff 的 track 序號}；同一軌開頭的 part 不只一個時，其餘加 .1、.2…
  * @property {string} name  GM 繁中音色名（取主 staff 的音色；同名依序加序號）
  * @property {number} noteCount
  * @property {number} startTick
@@ -213,7 +213,7 @@ export function buildSegments(notes) {
  * @property {KeySignatureEntry[]} keySignatures  同上
  * @property {MidiNote[]} notes  依 startTick 排序
  * @property {MidiSegment[]} segments  全曲的垂直切片：依 startTick 把 notes 分組（每個 startTick 一個 segment，ticks 遞增）
- * @property {MidiPart[]} parts  依首軌的 track 序號排序（＝總譜由上而下）
+ * @property {MidiPart[]} parts  依第一個 staff 的 track 序號、絕對 channel 排序（＝總譜由上而下）
  * @property {number} durationTicks  End of Track（各軌最晚的那個）
  * @property {number} durationSeconds
  * @property {number} lastVoiceEventTick  最後一個 channel 事件的 tick（官方 BasicMIDI 同名欄位，官方的 duration ＝ 它的秒數）；
@@ -240,9 +240,7 @@ export function parseMidi(input) {
   const midiTicksToSeconds = makeMidiTicksToSeconds(tempoMap, division);
   const timeSignatures = buildTimeSignatures(tracks);
   const keySignatures = buildKeySignatures(tracks);
-  // program 依時間軸查詢（沒有初始化區塊的 staff 用），見 parts.js 的 buildProgramResolver()。
-  const programResolver = buildProgramResolver(tracks);
-  const { parts, notes } = collectPartsAndNotes(tracks, midiTicksToSeconds, warn, programResolver);
+  const { parts, notes } = collectPartsAndNotes(tracks, midiTicksToSeconds, warn, format);
   const durationTicks = tracks.reduce((max, t) => Math.max(max, t.endTick), 0);
 
   return {

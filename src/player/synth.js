@@ -11,7 +11,7 @@ import { CC, DRUM_CHANNEL } from '../midi/midiParser.js';
 // 播放列需要的最小控制與狀態、關掉官方預設的循環播放；Sequencer 由 initEngine() 注入。
 
 const LOAD_TIMEOUT_MS = 8000;
-const EVENT_ID = 'harmonyflow-preview';
+const EVENT_ID = 'preview';
 
 // 失敗一律帶 kind 供呼叫端分流：'parse'＝官方解析器拒絕、'timeout'＝官方沒回應、'aborted'＝被 stop()／下一次 start() 中斷（通常靜默處理）
 const fail = (kind, message) => Object.assign(new Error(message), { kind });
@@ -39,7 +39,7 @@ export class PreviewPlayer {
   async start(bytes) {
     this.stop(); // 上一次試聽（包含還在等的載入）先結束
     const seq = (this._seq ??= this._createSequencer());
-    // 每次載入用不同檔名當識別：官方 songChange 事件帶檔名，晚到的舊事件靠它擋掉（midiError 沒檔名可比，但解析失敗幾毫秒內就回來）
+    // 每次載入用不同檔名當識別：官方 songChange 事件的 midiData.fileName 就是這裡給的檔名，晚到的舊事件靠它擋掉（midiError 沒檔名可比，但解析失敗幾毫秒內就回來）
     const name = `preview-${++this._loadCount}`;
     // 先掛監聽、再送出載入：官方的結果事件可能一送出就回來。
     const loaded = this._waitLoaded(seq, name);
@@ -78,7 +78,7 @@ export class PreviewPlayer {
 
   _createSequencer() {
     const seq = this._create();
-    seq.loopCount = 0; // 官方預設循環播放（-1），試聽播完就該停
+    seq.loopCount = 0; // 試聽播完就該停：明確設成不循環，不依賴官方預設（4.3.14 是 -1＝無限，4.4.8 是 0）
     return seq;
   }
 
@@ -93,7 +93,7 @@ export class PreviewPlayer {
         if (this._abort === settle) this._abort = null;
         if (err) reject(err); else resolve();
       };
-      seq.eventHandler.addEvent('songChange', EVENT_ID, (song) => { if (song?.fileName === name) settle(); });
+      seq.eventHandler.addEvent('songChange', EVENT_ID, ({ midiData }) => { if (midiData?.fileName === name) settle(); });
       seq.eventHandler.addEvent('midiError', EVENT_ID, (err) => settle(fail('parse', err?.message || '官方解析器拒絕這首 MIDI')));
       // 官方對「長度 0 秒」的 MIDI 既不回 songChange 也不回 midiError，沒有逾時會永遠卡在載入中。
       timer = setTimeout(() => settle(fail('timeout', '官方播放器沒有回應')), this._timeoutMs);
@@ -110,11 +110,11 @@ const SOUNDFONT_URLS = [
 ];
 
 // spessasynth_lib 直接從 CDN 匯入（不經 import map）：jsDelivr 的 +esm 端點把 CJS/UMD 轉成瀏覽器能 import 的 ESM；AudioWorklet 處理器跟入口在同一個套件目錄，
-// 直接拼路徑（+esm 不是真實目錄，import.meta.resolve 推不出位置）。版本固定 4.3.14（4.3 系列最後一版），兩個網址一起改：4.4.0 的 addNewChannel() 每個新 channel
-// 讓主執行緒丟 18 次 Uncaught TypeError（core 先 reset 新 channel 才發 channelAdded，2026-10-27 查證），而且 songChange 等 API 有破壞性改動。
-// 確切版本的 +esm 由 jsDelivr 第一次打包時固定相依版本（4.3.14 匯入 core 4.3.20），worklet 檔則包著作者打包時的 core。
-const LIB_ESM_URL = `https://cdn.jsdelivr.net/npm/spessasynth_lib@4.3.14/+esm`;
-const WORKLET_URL = `https://cdn.jsdelivr.net/npm/spessasynth_lib@4.3.14/dist/spessasynth_processor.min.js`;
+// 直接拼路徑（+esm 不是真實目錄，import.meta.resolve 推不出位置）。版本固定 4.4.8（2026-11-18 查的最新版），兩個網址一起改（官方文件要求 worklet 檔跟套件同版）。
+// 4.4.0 的 addNewChannel() 每個新 channel 讓主執行緒丟 18 次 Uncaught TypeError（core 先 reset 新 channel 才發 channelAdded，2026-10-27 查證）；core 4.4.9 起改成先發 channelAdded 再 reset（2026-11-18 比對 4.4.8／4.4.9 原始碼）。
+// 確切版本的 +esm 由 jsDelivr 第一次打包時固定相依版本（4.4.8 匯入 core 4.4.10），worklet 檔則包著作者打包時的 core（4.4.8 的 worklet 檔已是 4.4.10 的行為，2026-11-18 查證）。
+const LIB_ESM_URL = `https://cdn.jsdelivr.net/npm/spessasynth_lib@4.4.8/+esm`;
+const WORKLET_URL = `https://cdn.jsdelivr.net/npm/spessasynth_lib@4.4.8/dist/spessasynth_processor.min.js`;
 
 // WorkletSynthesizer 預設只建 16 個 channel（1 個 port）；聲部數超過時多出來的聲部分不到輸出 channel、整段靜音（國旗歌 24 個旋律聲部實測重現）。
 // 用 addNewChannel() 動態加開：模仿官方 Sequencer，開機先補到 DEFAULT_PORTS 個 port，歌曲需要更多時在 load() 依 portsNeeded() 補，只增不減。
@@ -139,9 +139,9 @@ let SequencerClass, previewPlayer = null, previewUsed = false;
 // 排程器（scheduler.js）驅動兩個合成器；播放器呼叫 trigger()（觸發當下發聲）並用排程 tick 呼叫 tick()（輔助聲部與到期收音）。
 export const scheduler = new Scheduler();
 
-// 不能讀 s.midiChannels.length 當實際 channel 數：已查證 spessasynth_lib 原始碼（basic_synthesizer.ts），addNewChannel() 在主執行緒本地 push 一筆，
-// worklet 建好 channel 後又經 channelAdded 事件回呼再 push 一次，length 最終多算成兩倍（實測呼叫 48 次後是 112 不是 64）；
-// 對只有 64 個的 worklet 送 channel ≥64 的 controllerChange 會讓它丟 Uncaught TypeError。所以 channel 數只能自己計數（portCount）。
+// 不能讀 s.midiChannels.length 當實際 channel 數：4.4.8 的 addNewChannel() 只把訊息送進 worklet，要等 worklet 建好 channel、回 channelAdded 事件才 push
+// （官方 JSDoc 與原始碼，2026-11-18 查證；4.3.14 會在主執行緒先 push 一次、回呼再 push 一次而變兩倍），呼叫當下讀到的長度還沒算進新 channel；
+// 對 worklet 沒有的 channel 送 controllerChange 會讓它丟 Uncaught TypeError（core 4.4.10 原始碼仍沒有範圍檢查）。所以 channel 數只能自己計數（portCount）。
 function channelCountOf(s) {
   return s ? portCount * CHANNELS_PER_PORT : CHANNELS_PER_PORT;
 }
@@ -223,14 +223,15 @@ export async function initEngine() {
       if (synthHuman.isReady) await synthHuman.isReady;
 
       // 兩個合成器補到 DEFAULT_PORTS 個 port（不讀 midiChannels.length，見 channelCountOf()），刻意放在 soundBank 載入完成之後：
-      // spessasynth_core 對每個動態新增的 channel 會先設成打擊 channel 並立刻查預設音色（createMIDIChannel()），soundBank 還沒載入時查不到，
-      // console 會噴「No preset found for DRUM:0!」（已查證是 processor.ts 預設 onMissingPreset handler 唯一的來源）。警告不影響功能，純粹是時機問題。
+      // 新 channel 一建立就查預設音色（core 4.4.10 的 createMIDIChannelInternal() 建好立刻 channel.reset(false)，裡面有 programChange），soundBank 先載入才查得到。
+      // 4.3.14 時期在 soundBank 之前加會噴「No preset found for DRUM:0!」；core 4.4.10 的預設 onMissingPreset 在還沒有任何音色庫時不警告（原始碼查證，2026-11-18）。
       portCount = DEFAULT_PORTS;
       scheduler.setPortCount(portCount);
       for (const s of [synth, synthHuman]) {
         for (let i = CHANNELS_PER_PORT; i < portCount * CHANNELS_PER_PORT; i++) s.addNewChannel();
-        // 動態新增的 channel 預設是打擊 channel（worklet 回讀實測 channel 16～63 全是打擊），旋律聲部超過 15 個的歌，channel 16 以上會用鼓組發聲。
-        // 整個合成器重設一次把每個 channel 設回 GM 配置（只有每個 port 的 channel 9 是打擊）；訊息有順序，reset 一定排在上面的 addNewChannel 之後才被 worklet 處理
+        // 4.3.14（core 4.3.20）動態新增的 channel 預設是打擊 channel（worklet 回讀實測 channel 16～63 全是打擊），要靠這次 reset 設回 GM 配置（只有每個 port 的 channel 9 是打擊）。
+        // core 4.4.10 建 channel 時就 reset 成這個配置（setDrums(ch % 16 === 9)，原始碼查證，2026-11-18），這裡的 reset 已不是必要；升版先保留、行為不變，拿掉與否等實測後決定。
+        // 訊息有順序，reset 一定排在上面的 addNewChannel 之後才被 worklet 處理
         s.reset();
       }
 

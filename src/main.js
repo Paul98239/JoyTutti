@@ -41,23 +41,8 @@ async function bootSystem() {
   warmPoseModel(); // 開機完成之後才在背景暖機姿勢模型，使用者第一次選現場人數時不必等下載
 }
 
-// 清掉曾註冊的 Service Worker 與 Cache Storage，免得攔截 src/assets/ 的請求；背景執行、不擋啟動
-function cleanupLegacyServiceWorker() {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.getRegistrations()
-      .then((regs) => regs.forEach((reg) => reg.unregister()))
-      .catch(() => {});
-  }
-  if (window.caches?.keys) {
-    caches.keys()
-      .then((names) => names.filter((n) => n.startsWith('harmonyflow-assets-')).forEach((n) => caches.delete(n)))
-      .catch(() => {});
-  }
-}
-
 bootSystem()
   .catch((err) => {
     console.error('❌ 系統啟動失敗', err);
     setLoadingStatus('啟動失敗，請重新整理頁面');
-  })
-  .finally(cleanupLegacyServiceWorker);
+  });

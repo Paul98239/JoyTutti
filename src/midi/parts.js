@@ -1,11 +1,11 @@
 import { buildPortOffsets } from './timeline.js';
 
-// parts.js — 名稱表（GM 繁中音色名、鼓組名、音名；分譜清單與 midiPlayer.js 用）、聲部切分（track → part／staff、依 GM family 拆 part、初始音色、命名）、音符配對、
+// parts.js — 名稱表（GM 繁中音色名、鼓組名、音名；分譜清單與 midiPlayer.js 用）、聲部切分（staff＝(track, 絕對 channel)、串成 part、初始音色、命名）、音符配對、
 // 控制器軌（每個絕對 channel 的非音符 channel 事件）、系統軌（SysEx 與分類）、文字軌（FF01～FF0F）、某個 tick 之前的控制器狀態與 chase 序列；
 // 也是 MIDI 規格常數與表的唯一定義處。segments 在 midiParser.js 的 buildSegments()。
 
 // GM1 打擊樂固定使用第 10 個 MIDI channel（索引 9）上 program 代表的鼓組而非旋律樂器；GM2 §2.4／§3.3.1 允許用 Bank Select 在任何 channel 切換：
-// bank 79H(121)＝旋律、78H(120)＝節奏——staff 的 percussionKit 依這條規則判定（buildPart()），不是只看 channel 號碼。這張表只用來檢查鼓組 program 是不是 GM2 附錄 B 定義的編號。
+// bank 79H(121)＝旋律、78H(120)＝節奏——staff 的 percussionKit 依這條規則判定（isPercussionBank()），不是只看 channel 號碼。這張表只用來檢查鼓組 program 是不是 GM2 附錄 B 定義的編號。
 // 拼法對齊 GM2 附錄 B 的表格標題：全部是「XXX Set」不是「XXX Kit」；56 號官方寫縮寫「SFX Set」。
 export const GM_DRUM_KITS = Object.freeze({
   0: 'Standard Set', 8: 'Room Set', 16: 'Power Set', 24: 'Electronic Set',
@@ -90,156 +90,97 @@ export const CC = Object.freeze({
   NRPN_LSB: 98, NRPN_MSB: 99, RPN_LSB: 100, RPN_MSB: 101, ALL_SOUND_OFF: 120, RESET_ALL: 121, ALL_NOTES_OFF: 123, MONO: 126, POLY: 127,
 });
 
-// 切分規則（一條規則，沒有「是不是 MuseScore 檔」的分支）：
-//   part ＝ MuseScore 的一個樂器（可指派的單位）。MuseScore 一個譜表一條 track，只有樂器最上面一行譜的 track 在 tick 0 對這個樂器的每個 channel 寫初始化區塊
-//   （CC121、[Bank]、Program Change、CC7／10／91／93），下面的譜表沒有。所以依軌序掃描：一條 track 併入「目前這一組」，當且僅當它沒有初始化區塊（hasInit）、
-//   軌名跟這組首軌相同（任一方是空的也算相同）、它的音符 channel 全在這組已知的 channel 內；否則自成新的一組。沒有音符的組（Meta 軌、空軌）不成聲部。
-//   staff ＝ 組內每一個「有音符的 (track, channel)」（鋼琴兩行譜是兩個 staff，弓弦的 pizzicato channel 有音時是另一個 staff）。
-//   不推導譜號、旋律／伴奏、Voice 1–4、演奏法、踏板線、動態曲線、反覆記號：MIDI 裡不存在或不精準，硬推只會多出誤判。
-//   已知限制：同一條 track 內的多個 channel 視為同一個樂器的音色層（format 0 的多樂器 GM 檔不會被拆開）。
+// 切分規則（不預設匯出軟體；每一步都只用 MIDI 檔裡寫明的東西：軌、絕對 channel、program、bank）：
+//   staff ＝ 一個「有音符的 (track, 絕對 channel)」，排程與輸出 channel 的單位。
+//   part ＝ 一組 staff，可指派的單位。兩個 staff 在同一個 part，當且僅當串得起來：
+//     ① 同一個絕對 channel（不論在哪一軌）：MIDI 1.0 的 channel 訊息（Program Change、控制器）作用在整個 channel，接收端同一時間一個 channel 只有一個音色，
+//        分不出是哪一軌送的。MuseScore 的鋼琴兩行譜、lakh 檔把鼓組每個打擊樂器各放一軌（都在第 10 個 channel），都因此是一個 part。
+//     ② format 1／2 的同一軌、而且樂器類別相同（打擊，或同一個 GM family＝program >> 3）：軌是寫檔端自己分的單位（RP-001），
+//        MuseScore 的演奏法 channel（普通 40／撥奏 45／震音 44）在同一軌、同一個 family。同一軌裡類別不同的 channel（混打擊與旋律、中途換樂器寫成另一個 channel）拆開。
+//        format 0 不套這條：RP-001 規定 format 0 只有一條「多 channel 的軌」，軌不帶任何分組資訊，每個 channel 各自成 part。
+//   中途換音色（program change 不在 tick 0）不拆：program 是 channel 在時間上的狀態（MIDI 1.0；GM2 §3.3.1：已在響的音維持原音色），staff 的 program 取第一顆音那個 tick 生效的值（buildPatchLookup()）。
+//   不推導左右手、譜號、旋律／伴奏、Voice 1–4、演奏法、踏板線、動態曲線、反覆記號，不依起訖時間或音數篩選或合併：MIDI 裡不存在或不精準，硬推只會多出誤判。
+//   沒有音符的軌（Meta 軌、空軌）不成 staff，它的事件仍在控制器軌（collectChannelLanes）。
 
-// 混音器的四個 CC：音量、聲像、殘響、合唱（MuseScore 的 Mixer 面板數值）。
+// 混音器的四個 CC：音量、聲像、殘響、合唱。
 const MIXER_CC = Object.freeze({ 7: 'volume', 10: 'pan', 91: 'reverb', 93: 'chorus' });
 // 沒有初始化區塊時下游送的 GM 預設值（CC121 依規格不會重設音量與聲像，見 GML-v1 §3.2.5.2）。
 export const GM_DEFAULT_MIXER = Object.freeze({ volume: 100, pan: 64, reverb: 0, chorus: 0 });
 
-// 逐軌摘要：有音符的 channel、tick 0 的初始化（每個 channel 的 program／bank／混音 CC，同一個值取最後一次）、
-// hasInit（tick 0 有 CC121 或混音 CC；單獨的 Program Change 不算——MuseScore 下行譜有時只有 Program Change）。
-function summarizeTrack(track) {
-  const noteChannels = new Set();
-  const initByChannel = new Map(); // channel → { program, msb, lsb, volume, pan, reverb, chorus }
-  let hasInit = false;
-  for (const ev of track.events) {
-    if (ev.kind !== 'channel') continue;
-    if (ev.type === 'noteOn' && ev.data2 > 0) noteChannels.add(ev.channel);
-    if (ev.ticks !== 0 || (ev.type !== 'programChange' && ev.type !== 'controlChange')) continue;
-    let init = initByChannel.get(ev.channel);
-    if (!init) initByChannel.set(ev.channel, (init = {}));
-    if (ev.type === 'programChange') {
-      init.program = ev.data1;
-    } else if (ev.type === 'controlChange') {
-      const cc = ev.data1;
-      if (cc === CC.RESET_ALL || cc in MIXER_CC) hasInit = true;
-      if (cc === CC.BANK_MSB) init.msb = ev.data2;
-      else if (cc === CC.BANK_LSB) init.lsb = ev.data2;
-      else if (cc in MIXER_CC) init[MIXER_CC[cc]] = ev.data2;
-    }
-  }
-  return { track, noteChannels, initByChannel, hasInit };
-}
-
-// 依軌序把 track 分組（＝part）：規則見上方說明。回傳只含有音符的組，每組 { first, tracks, knownChannels }。
-function groupTracks(summaries) {
-  const groups = [];
-  let cur = null;
-  for (const s of summaries) {
-    const canMerge = cur && !s.hasInit
-      && (!s.track.name || !cur.first.track.name || s.track.name === cur.first.track.name)
-      && [...s.noteChannels].every((ch) => cur.knownChannels.has(ch));
-    if (canMerge) {
-      cur.tracks.push(s);
-      for (const ch of s.noteChannels) cur.knownChannels.add(ch);
-    } else {
-      cur = { first: s, tracks: [s], knownChannels: new Set([...s.initByChannel.keys(), ...s.noteChannels]) };
-      groups.push(cur);
-    }
-  }
-  return groups.filter((g) => g.tracks.some((t) => t.noteChannels.size > 0));
-}
-
-// 這個 channel 在這條軌裡的樂器類別：打擊（bank MSB 120；沒指定 bank 時，絕對 channel 是第 10 個）或 GM family（program >> 3，每 8 個音色一組）。
-// 判定順序跟 buildPart() 決定 staff 音色的規則一致：首軌 tick 0 對這個 channel 的初始化優先（MuseScore 下行譜沿用首軌的），首軌沒有才看這條軌在該 channel 第一顆音之前
-// 最後一次送的 Program Change／Bank Select；都沒有就當 program 0、bank 沒指定。
-function instrumentClassOf(group, summary, channel, absChannel) {
-  const fromFirst = group.first.initByChannel.get(channel);
-  let program = fromFirst?.program, msb = fromFirst?.msb;
-  if (program === undefined || msb === undefined) {
-    let ownProgram, ownMsb;
-    for (const ev of summary.track.events) {
-      if (ev.kind !== 'channel' || ev.channel !== channel) continue;
-      if (ev.type === 'noteOn' && ev.data2 > 0) break;
-      if (ev.type === 'programChange') ownProgram = ev.data1;
-      else if (ev.type === 'controlChange' && ev.data1 === CC.BANK_MSB) ownMsb = ev.data2;
-    }
-    program ??= ownProgram ?? 0;
-    msb ??= ownMsb;
-  }
-  const isDrum = msb === BANK_MSB_RHYTHM || (msb === undefined && absChannel % 16 === DRUM_CHANNEL);
-  return isDrum ? '打擊' : `family ${program >> 3}`;
-}
-
-// 同一組 track（一個 part）裡如果有「不同樂器類別」的 channel（format 0 的多樂器檔、同軌混打擊與旋律），拆成不同的 part；
-// 同一個 GM family 的 channel（MuseScore 的 普通 40／撥奏 45／震音 44 這種演奏法 channel）維持在同一個 part。
-// part id：第一個 part 沿用 p＋首軌序號，其餘依序 p＋首軌序號＋.1、.2…（id 只是不透明的字串）。
-function splitGroupsByInstrument(groups, portOffsets, warn) {
-  const out = [];
-  for (const group of groups) {
-    const byClass = new Map(); // 樂器類別 → [{ summary, channels }]
-    for (const summary of group.tracks) {
-      const abs = portOffsets.get(summary.track.index) ?? 0;
-      for (const channel of [...summary.noteChannels].sort((a, b) => a - b)) {
-        const cls = instrumentClassOf(group, summary, channel, channel + abs);
-        if (!byClass.has(cls)) byClass.set(cls, new Map());
-        const perTrack = byClass.get(cls);
-        if (!perTrack.has(summary)) perTrack.set(summary, new Set());
-        perTrack.get(summary).add(channel);
-      }
-    }
-    if (byClass.size <= 1) { out.push(group); continue; }
-    const baseId = `p${group.first.track.index}`;
-    [...byClass.values()].forEach((perTrack, i) => {
-      out.push({
-        first: group.first, knownChannels: group.knownChannels, id: i === 0 ? baseId : `${baseId}.${i}`,
-        tracks: [...perTrack].map(([summary, channels]) => ({ ...summary, noteChannels: channels })),
-      });
-    });
-    warn(`part ${baseId}（track ${group.tracks.map((t) => t.track.index).join('、')}）含 ${byClass.size} 種不同樂器（${[...byClass.keys()].join('、')}），已拆成 ${byClass.size} 個 part`);
-  }
-  return out;
-}
-
-// Program Change 是 channel 的狀態、跨軌共用，但一顆音該用哪個 program 要看「這個時間點」該 channel 實際生效的值，不是前面處理過的軌道留下的值。
-// 這份查詢器：優先用同一軌自己在這個時間點之前最後一次送過的 Program Change；這軌自己沒送過才查全曲所有軌、同一個絕對 channel、時間點更早（同 tick 依軌序）的最後一次；都沒有就回傳預設 0。
-// 呼叫端必須依事件在檔案裡出現的順序使用：換軌呼叫 resetTrack()，遇到 Program Change 呼叫 noteProgramChange()，查詢穿插其間（collectNotes() 本來就逐軌逐事件處理）。
-export function buildProgramResolver(tracks) {
-  // 全曲查詢的 key 是絕對 channel（軌內 channel ＋ port 偏移）：不同 port 的同號 channel 是不同的 channel，只用軌內 channel 的話，沒有自己 Program Change 的軌會吃到別的 port 同號 channel 的音色
-  const portOffsets = buildPortOffsets(tracks);
-  const absChannel = (trackIndex, channel) => channel + (portOffsets.get(trackIndex) ?? 0);
-  const globalByChannel = new Map(); // 絕對 channel → [{ticks, trackIndex, program}]（依 tick、軌序排序）
+// 每個絕對 channel 在 tick 0 的混音 CC（同一個值取檔案順序最後一次＝接收端最後收到的；不分哪一軌送的，見切分規則 ①）。
+function mixerAtZero(tracks, portOffsets) {
+  const byChannel = new Map(); // 絕對 channel → { volume, pan, reverb, chorus }（只有送過的鍵）
   for (const track of tracks) {
+    const offset = portOffsets.get(track.index) ?? 0;
     for (const ev of track.events) {
-      if (ev.kind !== 'channel' || ev.type !== 'programChange') continue;
-      const key = absChannel(track.index, ev.channel);
-      let list = globalByChannel.get(key);
-      if (!list) globalByChannel.set(key, (list = []));
-      list.push({ ticks: ev.ticks, trackIndex: track.index, program: ev.data1 });
+      if (ev.ticks !== 0) break;   // 事件依 tick 排序
+      if (ev.kind !== 'channel' || ev.type !== 'controlChange' || !(ev.data1 in MIXER_CC)) continue;
+      const ch = ev.channel + offset;
+      if (!byChannel.has(ch)) byChannel.set(ch, {});
+      byChannel.get(ch)[MIXER_CC[ev.data1]] = ev.data2;
     }
   }
-  for (const list of globalByChannel.values()) {
-    list.sort((a, b) => a.ticks - b.ticks || a.trackIndex - b.trackIndex);
-  }
+  return byChannel;
+}
 
-  function globalLookup(channel, ticks) {
-    const list = globalByChannel.get(channel);
-    if (!list || !list.length) return null;
-    let lo = 0, hi = list.length - 1, ans = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (list[mid].ticks <= ticks) { ans = mid; lo = mid + 1; } else hi = mid - 1;
+// 打擊或旋律（GM 規格的 channel 角色）：GM1 規定第 10 個 channel 是打擊；GM2 §2.4／§3.3.1 只有 Bank Select MSB 78H(120)＝節奏、79H(121)＝旋律會改變角色，
+// 其他 MSB（GS／GM1 檔常在第 10 個 channel 送 0）不改變角色。所以：MSB 120 → 打擊、MSB 121 → 旋律、其他或沒送 → 依絕對 channel 是不是第 10 個。
+// 官方 SpessaSynth 在預設（GS）模式下也是第 10 個 channel 固定打擊、bank select 不切換；XG 的 MSB 127 不在 MMA 規格內，不採用。
+export const isPercussionBank = (msb, absChannel) =>
+  msb === BANK_MSB_RHYTHM || (msb !== BANK_MSB_MELODY && absChannel % 16 === DRUM_CHANNEL);
+
+// 把 staff 串成 part（切分規則 ① ②）：union-find。staves 依 (軌序, 絕對 channel) 排序；回傳 staff 陣列的陣列，依每組第一個 staff 排序（＝總譜由上而下）。
+function groupStaves(staves, format) {
+  const parent = staves.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb); };
+  const firstBy = new Map();
+  const link = (key, i) => { if (firstBy.has(key)) union(firstBy.get(key), i); else firstBy.set(key, i); };
+  staves.forEach((s, i) => {
+    link(`ch:${s.channel}`, i);
+    if (format !== 0) link(`tr:${s.trackIndex}:${s.percussionKit ? 'drum' : `family ${s.program >> 3}`}`, i);
+  });
+  const groups = new Map();
+  staves.forEach((s, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(s); });
+  return [...groups.values()];
+}
+
+// Program Change 與 Bank Select 是 channel 的狀態、跨軌共用；一個 staff 用哪個音色要看「它第一顆音那個 tick」這個 channel 生效的值。
+// 查詢 patchAt(trackIndex, 軌內 channel, 絕對 channel, tick)：優先用同一軌自己在這個 tick（含）之前最後一次送的；這軌自己沒送過才查全曲所有軌、
+// 同一個絕對 channel、tick（含）之前（同 tick 依軌序、軌內序）的最後一次。同一個 tick 的事件都算進去：MuseScore 會在第一顆音之後、同一個 tick 再送一次
+// Program Change（corpus/musescorefile/[JP]_LiSA_Gurenge_V2.mid 的第 0 軌：27 → 音 → 31），接收端從第二顆音起都是後送的那個音色。program 都沒送過是 0；bank 都沒送過是 null（由 buildStaff() 補 GM2 預設），
+// 只送過 MSB／LSB 其中一個時另一個視為 0。全曲查詢的 key 是絕對 channel（軌內 channel ＋ port 偏移）：不同 port 的同號 channel 是不同的 channel。
+function buildPatchLookup(tracks, portOffsets) {
+  const own = new Map();    // `${trackIndex}:${軌內 channel}` → [{ ticks, program?, msb?, lsb? }]（檔案順序）
+  const global = new Map(); // 絕對 channel → 同上（依 tick → 軌序 → 軌內序）
+  const push = (map, key, item) => { if (!map.has(key)) map.set(key, []); map.get(key).push(item); };
+  for (const track of tracks) {
+    const offset = portOffsets.get(track.index) ?? 0;
+    for (const ev of track.events) {
+      if (ev.kind !== 'channel') continue;
+      let item;
+      if (ev.type === 'programChange') item = { ticks: ev.ticks, trackIndex: track.index, program: ev.data1 };
+      else if (ev.type === 'controlChange' && ev.data1 === CC.BANK_MSB) item = { ticks: ev.ticks, trackIndex: track.index, msb: ev.data2 };
+      else if (ev.type === 'controlChange' && ev.data1 === CC.BANK_LSB) item = { ticks: ev.ticks, trackIndex: track.index, lsb: ev.data2 };
+      else continue;
+      push(own, `${track.index}:${ev.channel}`, item);
+      push(global, ev.channel + offset, item);
     }
-    return ans === -1 ? null : list[ans].program;
   }
-
-  let localProgram = new Map(); // 目前這一軌自己已知的 program，軌內 channel → program
-  let currentTrack = -1;        // 目前處理到哪一軌：全曲查詢要靠它算出絕對 channel
-  return {
-    resetTrack(trackIndex) { localProgram = new Map(); currentTrack = trackIndex; },
-    noteProgramChange(channel, program) { localProgram.set(channel, program); },
-    programAt(channel, ticks) {
-      if (localProgram.has(channel)) return localProgram.get(channel);
-      const global = globalLookup(absChannel(currentTrack, channel), ticks);
-      return global != null ? global : 0;
-    },
+  for (const list of global.values()) list.sort((a, b) => a.ticks - b.ticks || a.trackIndex - b.trackIndex);   // 穩定排序：同軌維持軌內順序
+  const lastBefore = (list, ticks, field) => {
+    let value;
+    for (const e of list ?? []) { if (e.ticks > ticks) break; if (e[field] !== undefined) value = e[field]; }
+    return value;
+  };
+  const pick = (field, trackIndex, channel, absChannel, ticks) =>
+    lastBefore(own.get(`${trackIndex}:${channel}`), ticks, field) ?? lastBefore(global.get(absChannel), ticks, field);
+  return (trackIndex, channel, absChannel, ticks) => {
+    const msb = pick('msb', trackIndex, channel, absChannel, ticks), lsb = pick('lsb', trackIndex, channel, absChannel, ticks);
+    return {
+      program: pick('program', trackIndex, channel, absChannel, ticks) ?? 0,
+      bank: msb === undefined && lsb === undefined ? null : { msb: msb ?? 0, lsb: lsb ?? 0 },
+    };
   };
 }
 
@@ -275,18 +216,18 @@ function makeNote(partId, staffId, trackIndex, eventIndex, channel, onEvent, end
   };
 }
 
-// 逐軌逐事件把 note-on／note-off 配成音，同時記下每個 staff 的統計（第一顆音當下生效的 program／bank、音符數、起訖、
-// 同音高重疊次數）。staffIndex：`${trackIndex}:${軌內 channel}` → { partId, staffId, channel（絕對） }。
-function collectNotes(tracks, midiTicksToSeconds, warn, programResolver, staffIndex) {
+// 逐軌逐事件把 note-on／note-off 配成音，同時記下每個 staff 的統計（音符數、起訖、音域、同音高重疊次數）。
+// staffIndex：`${trackIndex}:${軌內 channel}` → { staffId, trackIndex, trackChannel, channel（絕對） }。音的 partId 先留空，collectPartsAndNotes() 分完 part 再補。
+function collectNotes(tracks, midiTicksToSeconds, warn, staffIndex) {
   const notes = [];
-  const statsByStaff = new Map(); // staffId → { program, bank, noteCount, startTick, endTick, overlaps, minPitch, maxPitch }
-  const statsOf = (vk, program, bank) => {
+  const statsByStaff = new Map(); // staffId → { noteCount, startTick, endTick, overlaps, minPitch, maxPitch }
+  const statsOf = (vk) => {
     let st = statsByStaff.get(vk.staffId);
-    if (!st) statsByStaff.set(vk.staffId, (st = { program, bank, noteCount: 0, startTick: Infinity, endTick: 0, overlaps: 0, minPitch: 127, maxPitch: 0 }));
+    if (!st) statsByStaff.set(vk.staffId, (st = { noteCount: 0, startTick: Infinity, endTick: 0, overlaps: 0, minPitch: 127, maxPitch: 0 }));
     return st;
   };
   const emit = (vk, trackIndex, eventIndex, onEv, endTick) => {
-    const note = makeNote(vk.partId, vk.staffId, trackIndex, eventIndex, vk.channel, onEv, endTick, midiTicksToSeconds);
+    const note = makeNote('', vk.staffId, trackIndex, eventIndex, vk.channel, onEv, endTick, midiTicksToSeconds);
     const st = statsByStaff.get(vk.staffId);
     st.noteCount++;
     st.startTick = Math.min(st.startTick, note.startTick);
@@ -297,8 +238,6 @@ function collectNotes(tracks, midiTicksToSeconds, warn, programResolver, staffIn
   };
 
   for (const track of tracks) {
-    programResolver.resetTrack(track.index);
-    const runningBank = new Map(); // channel → { msb, lsb }：這一軌到目前為止最後一次送的 Bank Select
     // key = channel * 128 + 音高。同一 key 可能同時有多顆未收尾的音（同音重疊），
     // 以先進先出配對：先響的音先被關掉，這是最貼近演奏直覺的解讀。
     const pending = new Map();
@@ -311,13 +250,6 @@ function collectNotes(tracks, midiTicksToSeconds, warn, programResolver, staffIn
     for (let eventIndex = 0; eventIndex < track.events.length; eventIndex++) {
       const ev = track.events[eventIndex];
       if (ev.kind !== 'channel') continue;
-      if (ev.type === 'programChange') { programResolver.noteProgramChange(ev.channel, ev.data1); continue; }
-      if (ev.type === 'controlChange' && (ev.data1 === CC.BANK_MSB || ev.data1 === CC.BANK_LSB)) {
-        let b = runningBank.get(ev.channel);
-        if (!b) runningBank.set(ev.channel, (b = { msb: 0, lsb: 0 }));
-        if (ev.data1 === CC.BANK_MSB) b.msb = ev.data2; else b.lsb = ev.data2;
-        continue;
-      }
       const isNoteOn = ev.type === 'noteOn' && ev.data2 > 0;
       // 規格允許用「力度 0 的 note on」代替 note off（可讓整段音符共用 running status），實務上絕大多數檔案都這樣寫
       const isNoteOff = ev.type === 'noteOff' || (ev.type === 'noteOn' && ev.data2 === 0);
@@ -326,8 +258,7 @@ function collectNotes(tracks, midiTicksToSeconds, warn, programResolver, staffIn
       const key = ev.channel * 128 + ev.data1;
       if (isNoteOn) {
         const vk = staffIndex.get(`${track.index}:${ev.channel}`);
-        // staff 的 program／bank 取「第一顆音響起當下」生效的值（沒有初始化區塊時才會用到，見 buildPart()）。
-        const st = statsOf(vk, programResolver.programAt(ev.channel, ev.ticks), runningBank.has(ev.channel) ? { ...runningBank.get(ev.channel) } : null);
+        const st = statsOf(vk);
         let queue = pending.get(key);
         if (!queue) pending.set(key, (queue = []));
         if (queue.length) st.overlaps++;
@@ -369,41 +300,32 @@ function collectNotes(tracks, midiTicksToSeconds, warn, programResolver, staffIn
   return { notes, statsByStaff };
 }
 
-// 一組 track（part）→ part 物件與底下的 staff。staff 的初始狀態：
-//   · 這組首軌在 tick 0 對這個 channel 有初始化 → 直接採用（program；bank；混音 CC7／10／91／93，缺的補 GM 預設）。
-//     下行譜的 staff 沿用首軌對同一個 channel 的初始化（MuseScore 只在最上行譜寫初始化區塊）。
-//   · 沒有 → program 沿用時間軸查詢（自己軌優先、再查全曲、預設 0；見 buildProgramResolver），bank 取第一顆音之前最後一次
-//     送的 CC0／CC32，混音 init 記 null（下游用 GM 預設）。
-//   · bank 都沒送過時用 GM2 §3.3.1 的規格預設（絕對 channel 的第 10 個 channel 是節奏 bank 120，其餘是旋律 bank 121）；
-//     percussionKit ＝ bank MSB 為 120（GM2 §2.4：任何 channel 送 Bank 78H 都是節奏通道，不限 channel 9）。
-function buildPart(group, partId, statsByStaff, staffIndex, warn) {
-  const staves = [];
-  for (const summary of group.tracks) {
-    for (const channel of [...summary.noteChannels].sort((a, b) => a - b)) {
-      const vk = staffIndex.get(`${summary.track.index}:${channel}`);
-      const st = statsByStaff.get(vk.staffId);
-      const fromInit = group.first.initByChannel.get(channel) || null;
-      const hasBank = fromInit && (fromInit.msb !== undefined || fromInit.lsb !== undefined);
-      const defaultMsb = vk.channel % 16 === DRUM_CHANNEL ? BANK_MSB_RHYTHM : BANK_MSB_MELODY;
-      const bank = hasBank ? { msb: fromInit.msb ?? defaultMsb, lsb: fromInit.lsb ?? 0 } : (st.bank ?? { msb: defaultMsb, lsb: 0 });
-      const program = fromInit?.program ?? st.program;
-      const percussionKit = bank.msb === BANK_MSB_RHYTHM;
-      const hasMixer = fromInit && Object.values(MIXER_CC).some((k) => fromInit[k] !== undefined);
-      const init = hasMixer ? Object.fromEntries(Object.entries(GM_DEFAULT_MIXER).map(([k, d]) => [k, fromInit[k] ?? d])) : null;
-      if (percussionKit && !(program in GM_DRUM_KITS)) {
-        // 這裡只確定「不是 GM2 附錄 B 定義的編號」，顯示名稱因此只能退回「標準鼓組」（見 gmProgramNameZh()）；實際播放會不會退回標準鼓組取決於載入的 SoundFont
-        // （查證過 GeneralUserGS.sf3 額外提供 program 1/2/26/127 這幾組，不會真的退回），所以只能提醒顯示名稱不準確，不能斷言。
-        warn(`track ${summary.track.index} 的 channel ${channel}：鼓組 program ${program} 不是 GM2 規格附錄 B 定義的編號，顯示名稱只能用「標準鼓組」代替，實際會播放哪一組鼓聲取決於載入的 SoundFont 有沒有提供這個編號`);
-      }
-      if (st.overlaps) {
-        warn(`track ${summary.track.index} 的 channel ${channel}：同音高重疊 ${st.overlaps} 次（依先進先出配對，每個 note-on 配到最早還沒結束的那顆音）`);
-      }
-      staves.push({
-        id: vk.staffId, partId, trackIndex: summary.track.index, channel: vk.channel, program, bank, percussionKit, init,
-        noteCount: st.noteCount, startTick: st.startTick, endTick: st.endTick, minPitch: st.minPitch, maxPitch: st.maxPitch,
-      });
-    }
+// 一個 staff 的初始狀態（staff 是一個 (track, 絕對 channel)，見 collectNotes() 的統計）：
+//   · program、bank：第一顆音那個 tick 生效的值（patch，見 buildPatchLookup()）；bank 都沒送過用 GM2 §3.3.1 的規格預設
+//     （第 10 個 channel 是節奏 bank 120，其餘是旋律 bank 121）。percussionKit 依 isPercussionBank()。
+//   · init：這個絕對 channel 在 tick 0 的混音 CC7／10／91／93（不分哪一軌送的，缺的補 GM 預設）；tick 0 都沒送是 null（下游用 GM 預設）。
+function buildStaff(vk, st, patch, mixer, warn) {
+  const { program } = patch;
+  const bank = patch.bank ?? { msb: vk.channel % 16 === DRUM_CHANNEL ? BANK_MSB_RHYTHM : BANK_MSB_MELODY, lsb: 0 };
+  const percussionKit = isPercussionBank(patch.bank?.msb, vk.channel);
+  const init = mixer ? Object.fromEntries(Object.entries(GM_DEFAULT_MIXER).map(([k, d]) => [k, mixer[k] ?? d])) : null;
+  if (percussionKit && !(program in GM_DRUM_KITS)) {
+    // 這裡只確定「不是 GM2 附錄 B 定義的編號」，顯示名稱因此只能退回「標準鼓組」（見 gmProgramNameZh()）；實際播放會不會退回標準鼓組取決於載入的 SoundFont
+    // （查證過 GeneralUserGS.sf3 額外提供 program 1/2/26/127 這幾組，不會真的退回），所以只能提醒顯示名稱不準確，不能斷言。
+    warn(`track ${vk.trackIndex} 的 channel ${vk.channel}：鼓組 program ${program} 不是 GM2 規格附錄 B 定義的編號，顯示名稱只能用「標準鼓組」代替，實際會播放哪一組鼓聲取決於載入的 SoundFont 有沒有提供這個編號`);
   }
+  if (st.overlaps) {
+    warn(`track ${vk.trackIndex} 的 channel ${vk.channel}：同音高重疊 ${st.overlaps} 次（依先進先出配對，每個 note-on 配到最早還沒結束的那顆音）`);
+  }
+  return {
+    id: vk.staffId, partId: '', trackIndex: vk.trackIndex, channel: vk.channel, program, bank, percussionKit, init,
+    noteCount: st.noteCount, startTick: st.startTick, endTick: st.endTick, minPitch: st.minPitch, maxPitch: st.maxPitch,
+  };
+}
+
+// 一組 staff → part 物件（staves 依軌序、絕對 channel 排序）。
+function buildPart(partId, staves) {
+  for (const s of staves) s.partId = partId;
   return {
     id: partId,
     name: '', // nameParts() 補：要先數過所有 part 才知道哪些音色名需要加序號
@@ -432,25 +354,48 @@ function nameParts(parts) {
   });
 }
 
-// 整個聲部切分：track 摘要 → 分組（part）→ 配對音符（同時算 staff 統計）→ 組成 part／staff → 命名。
-export function collectPartsAndNotes(tracks, midiTicksToSeconds, warn, programResolver) {
+// 整個聲部切分：音符配對（同時算每個 staff 的統計）→ staff 初始狀態 → 串成 part（切分規則見上方說明）→ 命名。
+export function collectPartsAndNotes(tracks, midiTicksToSeconds, warn, format) {
   const portOffsets = buildPortOffsets(tracks);
-  const groups = splitGroupsByInstrument(groupTracks(tracks.map(summarizeTrack)), portOffsets, warn);
-  // `${trackIndex}:${軌內 channel}` → { partId, staffId, channel（絕對） }；part id ＝ p＋首軌序號（一組拆成多個 part 時依序加 .1、.2…），
-  // staff id ＝ t＋軌序號＋c＋絕對 channel。
+  // `${trackIndex}:${軌內 channel}` → { staffId, trackIndex, trackChannel, channel（絕對） }；staff id ＝ t＋軌序號＋c＋絕對 channel。
   const staffIndex = new Map();
-  const partIds = new Map(groups.map((g) => [g, g.id ?? `p${g.first.track.index}`]));
-  for (const group of groups) {
-    for (const summary of group.tracks) {
-      for (const channel of summary.noteChannels) {
-        const abs = channel + (portOffsets.get(summary.track.index) ?? 0);
-        staffIndex.set(`${summary.track.index}:${channel}`, { partId: partIds.get(group), staffId: `t${summary.track.index}c${abs}`, channel: abs });
-      }
+  for (const track of tracks) {
+    const abs = portOffsets.get(track.index) ?? 0;
+    for (const ev of track.events) {
+      if (ev.kind !== 'channel' || ev.type !== 'noteOn' || ev.data2 === 0) continue;
+      const key = `${track.index}:${ev.channel}`;
+      if (!staffIndex.has(key)) staffIndex.set(key, { staffId: `t${track.index}c${ev.channel + abs}`, trackIndex: track.index, trackChannel: ev.channel, channel: ev.channel + abs });
     }
   }
 
-  const { notes, statsByStaff } = collectNotes(tracks, midiTicksToSeconds, warn, programResolver, staffIndex);
-  const parts = groups.map((group) => buildPart(group, partIds.get(group), statsByStaff, staffIndex, warn));
+  const { notes, statsByStaff } = collectNotes(tracks, midiTicksToSeconds, warn, staffIndex);
+  const patchAt = buildPatchLookup(tracks, portOffsets);
+  const mixer = mixerAtZero(tracks, portOffsets);
+  const staves = [...staffIndex.values()]
+    .sort((a, b) => a.trackIndex - b.trackIndex || a.channel - b.channel)
+    .map((vk) => {
+      const st = statsByStaff.get(vk.staffId);
+      return buildStaff(vk, st, patchAt(vk.trackIndex, vk.trackChannel, vk.channel, st.startTick), mixer.get(vk.channel), warn);
+    });
+
+  // part id ＝ p＋第一個 staff 的軌序號；同一軌開頭的 part 不只一個時，其餘依序加 .1、.2…（id 只是不透明的字串）。
+  const parts = [];
+  const perTrack = new Map();
+  for (const group of groupStaves(staves, format)) {
+    const base = `p${group[0].trackIndex}`;
+    const n = perTrack.get(base) ?? 0;
+    perTrack.set(base, n + 1);
+    parts.push(buildPart(n === 0 ? base : `${base}.${n}`, group));
+  }
+  if (format !== 0) {
+    // 同一軌裡有不同樂器類別的 channel、因此拆成多個 part（切分規則 ②）：提醒一次，方便追查（MuseScore 的「換樂器」也會這樣寫）。
+    for (const track of tracks) {
+      const ids = [...new Set(staves.filter((s) => s.trackIndex === track.index).map((s) => s.partId))];
+      if (ids.length >= 2) warn(`track ${track.index} 的 channel 分屬 ${ids.length} 種不同樂器類別（打擊／GM family），分在 ${ids.join('、')} 這幾個 part`);
+    }
+  }
+  const partOf = new Map(staves.map((s) => [s.id, s.partId]));
+  for (const note of notes) note.partId = partOf.get(note.staffId);
   nameParts(parts);
   if (!parts.length) warn('這份檔案裡沒有任何音符，切分不出聲部');
   return { parts, notes };
