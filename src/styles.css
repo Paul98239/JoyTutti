@@ -332,8 +332,11 @@ body {
 /* 淡化：純 CSS :hover／:has()／:focus-within，沒有 JS 計時器、沒有延遲：碰到（或鍵盤焦點進去）就顯示，沒碰到立刻淡化。
    播放 pill 常駐不淡出（2026-11-19 起「選歌」在 pill 上，它是隨時都要找得到的入口；播放中也要看得到歌名）。
    控制列（鏡頭／人數／重置）平常淡化、碰到才顯示；還沒有能播放的歌曲之前（播放 pill 帶 is-empty：idle／載入中）常駐不淡出——這時要先選現場人數。
-   選歌面板開著時控制列不特別處理：面板在控制列之下，不會互相遮蔽。觸控裝置沒有 hover，states 層的 @media (hover: none) 讓控制列固定顯示。 */
+   選歌面板在控制列之下，平常不會互相遮蔽；但控制列淡化時 opacity < 1 自成疊放層，裡面的系統提示（.tl-note）與按鈕提示的 z-index 61 只在列裡面算，
+   往下伸出去的部分會被面板（z-index 60）蓋住（2026-11-20 code review）。所以控制列本身給 z-index 61，整列連同伸出去的提示都在面板之上。
+   觸控裝置沒有 hover，states 層的 @media (hover: none) 讓控制列固定顯示。 */
 .control-row {
+  z-index: 61;
   opacity: var(--idle-opacity);
   transition: opacity var(--dur-base) ease;
 }
@@ -517,7 +520,7 @@ body {
 
 /* 滑鼠移上去顯示按鈕名稱：純 CSS，文字直接讀按鈕的 aria-label（♪、鏡頭開關的 aria-label 由 JS 依狀態在「開啟○○／關閉○○」之間切換，提示自動跟著變）。播放列四顆鈕與系統控制的鏡頭／重置鈕共用這一條；
    不用瀏覽器原生 title（樣式與出現延遲都不同）。只在有 hover 的裝置、按鈕可按時顯示（disabled 的 opacity 0.4 會連提示一起變淡）；pointer-events:none 讓提示不搶走按鈕的 hover。
-   z-index 61：高過選歌面板（60），面板開著時提示不會被蓋住（同 .tl-note）。只對控制列的按鈕有效：播放 pill（#toolbar-playback）是 position:relative＋z-index:1，
+   z-index 61：高過選歌面板（60），面板開著時提示不會被蓋住（同 .tl-note；控制列淡化時靠 .control-row 本身的 z-index 61）。只對控制列的按鈕有效：播放 pill（#toolbar-playback）是 position:relative＋z-index:1，
    自成一個疊放層，裡面的提示在 #top-center-stack 裡只算 1；pill 的提示往下只會蓋到控制列，到不了下面的面板，所以不影響。 */
 @media (hover: hover) {
   .tb-btn::after, .tl-text-btn::after {

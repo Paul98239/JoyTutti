@@ -1283,7 +1283,9 @@ export class Scheduler {
   }
 
   // 近距起音分組：從組頭 j 往後串，相鄰兩個起音符合任一層就併進來，一直串到兩層都不成立為止（門檻與依據見 tempo.js）：
-  //   ① 和弦內的時間差：樂譜間隔 < CHORD_SPREAD_S（不除以速度）；
+  //   ① 和弦內的時間差：這個起音距組頭的樂譜間隔 < CHORD_SPREAD_S（不除以速度）。量的是距組頭、不是相鄰間隔：只看相鄰的話，
+  //      每個間隔都短於 50 ms 的一長串快音（例如 160 BPM 的 32 分音符約 47 ms）會整串併成一下（2026-11-20 code review）；
+  //      跟 asap 的評估（相鄰兩個起音）比，和弦錯位超過 50 ms 的那一小部分（同一下的 P95 是 45 ms）會拆成兩下；
   //   ② 按不及：樂譜間隔依目前速度換成真實時間 < 這個輸入來源的最短間隔（minPressIntervalSec）；有長度上限的來源（手勢，maxGroupSpanSec）再加一條：
   //      這個起音距組頭的真實時間不超過上限，不然停在這裡，下一次揮手就按得到。彈得慢間隔被拉開、② 併的就少，彈得快併的就多。
   // dev 開關「一下一切片」只關掉 ②：真人演奏的 MIDI 一個和弦散在好幾個 tick，連 ① 都關掉的話每個音都要按一下，估速被拉到區間下限、合奏幾乎不動（2026-11-19 查 R2-16）。
@@ -1293,8 +1295,8 @@ export class Scheduler {
     const minSec = minPressIntervalSec(source), spanSec = maxGroupSpanSec(source), headSec = this._secOf(segs[j].ticks);
     let m = j + 1;
     while (m < segs.length) {
-      const gap = this._secOf(segs[m].ticks) - this._secOf(segs[m - 1].ticks);
-      if (!(gap < CHORD_SPREAD_S || (!oneSlice && gap / rate < minSec && (this._secOf(segs[m].ticks) - headSec) / rate < spanSec))) break;
+      const sec = this._secOf(segs[m].ticks), gap = sec - this._secOf(segs[m - 1].ticks);
+      if (!(sec - headSec < CHORD_SPREAD_S || (!oneSlice && gap / rate < minSec && (sec - headSec) / rate < spanSec))) break;
       m++;
     }
     return m;

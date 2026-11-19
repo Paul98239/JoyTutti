@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- 網站圖示（index.html 的 <link rel="icon">）。2026-11-20 從 index.html 的 data URI 原樣搬出來，圖形與顏色沒改。 -->
+  <rect width="100" height="100" rx="22" fill="#1e1b4b"/>
+  <g fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M17 21v11M11 24l6 3 6-3M12 41l5-9 5 9" stroke="#f472b6"/>
+    <path d="M39 21v11M33 24l6 3 6-3M34 41l5-9 5 9" stroke="#fbbf24"/>
+    <path d="M61 21v11M55 24l6 3 6-3M56 41l5-9 5 9" stroke="#34d399"/>
+    <path d="M83 21v11M77 24l6 3 6-3M78 41l5-9 5 9" stroke="#60a5fa"/>
+  </g>
+  <circle cx="17" cy="16" r="4.5" fill="#f472b6"/>
+  <circle cx="39" cy="16" r="4.5" fill="#fbbf24"/>
+  <circle cx="61" cy="16" r="4.5" fill="#34d399"/>
+  <circle cx="83" cy="16" r="4.5" fill="#60a5fa"/>
+  <rect x="8" y="52" width="50" height="38" rx="4" fill="white"/>
+  <path d="M18 52v38M28 52v38M38 52v38M48 52v38" stroke="#1e1b4b" stroke-width="2"/>
+  <rect x="15" y="52" width="6" height="22" fill="#1e1b4b"/>
+  <rect x="25" y="52" width="6" height="22" fill="#1e1b4b"/>
+  <rect x="45" y="52" width="6" height="22" fill="#1e1b4b"/>
+  <g transform="rotate(15 79 71)">
+    <rect x="77" y="49" width="4" height="20" fill="#fb923c"/>
+    <circle cx="79" cy="69" r="7.5" fill="#fb923c"/>
+    <circle cx="79" cy="80" r="10" fill="#fb923c"/>
+    <circle cx="79" cy="76" r="3" fill="#1e1b4b"/>
+    <path d="M79 50v35" stroke="white" stroke-width="1.5"/>
+  </g>
+</svg>

@@ -105,7 +105,7 @@ function applyUiFontSize() {
 }
 
 // 選歌面板高度上限＝視窗底邊減面板頂端（#top-center-stack 底邊＋面板的上間距 0.5em，見 styles.css 的 .tl-popup），不管視窗比例或全螢幕都準。
-// 2026-11-19 起以視窗底邊為準：16:9 框的邊已經淡化看不見，比 16:9 高的螢幕（16:10 等）可以多用框上下的空白。空間小到誇張時退回下限，不讓面板消失。
+// 2026-11-19 起以視窗底邊為準：面板是 position:fixed 疊層的子元素、不在 16:9 框裡，比 16:9 高的螢幕（16:10 等）可以多用框上下的空白（2026-11-20 框加回細框線後仍是這樣：面板疊在框線之上）。空間小到誇張時退回下限，不讓面板消失。
 const POPUP_BOTTOM_MARGIN_PX = 8;
 const POPUP_MAX_HEIGHT_FLOOR_PX = 120;
 const POPUP_TOP_GAP_EM = 0.5;

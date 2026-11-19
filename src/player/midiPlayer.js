@@ -113,7 +113,9 @@ export function assignmentUnits(parts) {
 //     可能是同一個樂器被分在不同 channel。軌名是自由文字（不採信它來切分，只拿來當提示）
 // 回傳 part id → { late: 進入秒數|null, group: 'A'|'B'…|null }；單一 part 拆譜表（assignmentUnits 的特例）時不標。超過 26 組時字母後面加輪次（A2、B2…）。
 // 依 score 快取：infoText() 每次重繪都會用到，播放中約每 200ms 重繪一次，score 不變結果就不變。
-const normTrackName = (s) => (s ?? '').toLowerCase().replace(/[\s_\-.:#()[\]{}'"]/g, '').replace(/(righthand|lefthand|rh|lh|left|right|[lr]|\d+)+$/g, '');
+// 單一字母 l／r 只在分隔符號後面才算左右手（「Piano L」）：直接去掉結尾的 l、r 會把 Guitar 變 guita、Bell 變 be（2026-11-20 code review）。
+const normTrackName = (s) => (s ?? '').toLowerCase().replace(/(?:[\s_\-.:#]*(?:right[\s_\-.]*hand|left[\s_\-.]*hand|rh|lh|left|right)|[\s_\-.:#]+[lr]|[\s_\-.:#]*\d+)+[\s_\-.:#]*$/, '')
+  .replace(/[\s_\-.:#()[\]{}'"]/g, '');
 const hintsCache = new WeakMap();   // score → partHints() 的結果
 export function partHints(score) {
   if (!score || score.parts.length < 2) return new Map();
@@ -127,7 +129,8 @@ function computePartHints(score) {
   for (const part of score.parts) {
     const main = [...part.staves].sort((a, b) => b.noteCount - a.noteCount)[0];
     const name = normTrackName(score.tracks[main.trackIndex]?.name);
-    if (!main.percussionKit && name) keyOf.set(part.id, `${main.program}|${name}`);
+    // format 0 只有一條軌，每個 part 的軌名都一樣，軌名不是證據：不標同組
+    if (!main.percussionKit && name && score.format !== 0) keyOf.set(part.id, `${main.program}|${name}`);
     hints.set(part.id, { late: part.startTick / end > 0.25 ? score.midiTicksToSeconds(part.startTick) : null, group: null });
   }
   const members = new Map();
@@ -455,7 +458,9 @@ function reassignInPlace() {
 export function setDevModes(source, patch) {
   if (isSongLoading) throw new Error('載入或處理中，等播放開始後再切換');
   const cur = synth.scheduler.cfg.modes;
-  if (!(source in cur)) throw new Error(`來源只有 ${Object.keys(cur).join('／')}`);
+  if (!Object.hasOwn(cur, source)) throw new Error(`來源只有 ${Object.keys(cur).join('／')}`);
+  const bad = Object.keys(patch).filter((k) => !Object.hasOwn(cur[source], k));
+  if (bad.length) throw new Error(`沒有這個開關：${bad.join('、')}（只有 ${Object.keys(cur[source]).join('／')}）`);   // 打錯字時不默默吃掉
   synth.scheduler.cfg = { ...synth.scheduler.cfg, modes: Object.freeze({ ...cur, [source]: Object.freeze({ ...cur[source], ...patch }) }) };
   if (canReassignInPlace()) reassignInPlace();
   else lastPlayedSignature = null;   // 沒辦法就地重建：下一次 ▶ 一定重新載入
