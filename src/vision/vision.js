@@ -35,7 +35,10 @@ export function warmPoseModel() {
 // landmarker 在 Worker（poseWorker.js）裡、只有一份：選了「現場人數」N 才建 numPoses=N 的那份，之後換人數用 setOptions() 原地更新；追蹤層的槽位數（＝ ID 上限）也設成 N（setPoseCount）。
 // 推論放在 Worker：detectForVideo 是同步的、會卡住呼叫它的執行緒（官方文件），放在主執行緒時按鍵、按鈕與伴奏排程都要排隊等它。
 
-const POSE_COLORS = ["#00FFFF", "#FF6B6B", "#51CF66", "#FFD43B"]; // 4 人的代表色彩（依鎖定槽位對應）
+// 4 人的代表色彩（依鎖定槽位對應）。2026-11-20 使用者選定：藍綠、橙、白、淡紫。舊色（青、珊瑚紅、綠、黃）在綠色盲模擬下紅綠色差只有 3.5（CIEDE2000），黃跟 UI 的琥珀色差 2.1。
+// 這組在一般色覺、Machado 2009 三種色覺模擬與 75 歲水晶體近似（Pokorny 1987）下兩兩色差至少 17.3、跟琥珀 --accent 至少 12.7，對舞台最亮與最暗處至少 3.37:1
+// （WCAG 非文字元件 3:1）；色差門檻沒有規格值，只取這個候選池裡最差情況最大的一組（docs/paper 的 Luo 2001、Sharma 2005 是 CIEDE2000 公式出處）。
+const POSE_COLORS = ["#40B696", "#E08640", "#FFFFFF", "#B8B8FF"];
 // 骨架的粗細跟著這個人在畫面上的大小（sc＝track.scale × 畫面寬，像素，見 renderSkeletonOverlay）縮放；下面兩個是人很小時的下限（px）
 const BONE_WIDTH = 2;      // 骨架實線寬度的下限
 const JOINT_RADIUS = 2;    // 關節圓點半徑的下限

@@ -7,7 +7,7 @@
 // 預報入口 setForecaster()：每個 tick 問預報器「你會在什麼時刻按下一個起音」，收到有效預報就段中換錨、重排還沒送出的電腦音（_applyForecast）；預設沒有預報器，行為完全不變。
 // 所有合成器呼叫都經過 voices.js。
 
-import { TempoFollower, minPressIntervalSec, maxGroupSpanSec } from './tempo.js';
+import { TempoFollower, CHORD_SPREAD_S, minPressIntervalSec, maxGroupSpanSec } from './tempo.js';
 import { OutputRouter, portsFor, VoiceLedger, scaledMs, EPS_MS } from './voices.js';
 import { buildPlan, staffPools, sliceOfTick, switchesKit, stateEvents, emptyPerformerPlan, slotOrder } from './performancePlan.js';
 import { ChannelStateTracker, chaseEventsAt, DRUM_CHANNEL } from '../midi/midiParser.js';
@@ -24,7 +24,7 @@ export const DEFAULT_SCHEDULER_CONFIG = Object.freeze({
   stage2K: ENSEMBLE.STAGE2_K,   // 第二段防呆：錯過幾下才代打（ensemble.js 的 shouldSubstitute；可以傳別的值試）
   // 1-B 的 dev 開關（2026-11-19 加；預設全關＝行為不變，使用者實機比較後才定預設）。依輸入來源分開：keyboard＝PC 鍵盤手，gesture＝揮手（沒帶來源的槽位觸發也算這邊）。
   // load()／reassign() 時才讀（演奏中改 cfg 不影響這一輪；devStats.js 的 __tryMode() 改完會重新載入）。
-  //   oneSlice：一下推進一個垂直切片，不做近距起音分組（_groupEnd）
+  //   oneSlice：一下推進一個垂直切片，近距起音分組只留「和弦內的時間差」那層、不做「按不及」（_groupEnd）
   //   holdToNext：讀法 B，只看 noteOn：他的音一律響到他的下一個起音才收（沒有 hold 的音也拉長）；鍵盤開這個就不再用放開鍵收音（keyup 模式關掉）
   modes: Object.freeze({
     keyboard: Object.freeze({ oneSlice: false, holdToNext: false }),
@@ -1282,15 +1282,21 @@ export class Scheduler {
     this._ledger.closeDue(this._clockMs);                           // 零長度的音
   }
 
-  // 近距起音分組：從組頭 j 往後串，相鄰兩個起音的樂譜間隔依目前速度換成真實時間，比這個輸入來源的最短間隔還短（按不及；鍵盤 0.06 秒，tempo.js 的 minPressIntervalSec）就併進來，一直串到不按不及為止；
-  // 有長度上限的來源（手勢，tempo.js 的 maxGroupSpanSec）再加一條：這個起音距組頭的真實時間不超過上限，不然停在這裡，下一次揮手就按得到。
-  // 彈得慢間隔被拉開、併的就少，彈得快併的就多。回傳這一組的結束（不含）。
+  // 近距起音分組：從組頭 j 往後串，相鄰兩個起音符合任一層就併進來，一直串到兩層都不成立為止（門檻與依據見 tempo.js）：
+  //   ① 和弦內的時間差：樂譜間隔 < CHORD_SPREAD_S（不除以速度）；
+  //   ② 按不及：樂譜間隔依目前速度換成真實時間 < 這個輸入來源的最短間隔（minPressIntervalSec）；有長度上限的來源（手勢，maxGroupSpanSec）再加一條：
+  //      這個起音距組頭的真實時間不超過上限，不然停在這裡，下一次揮手就按得到。彈得慢間隔被拉開、② 併的就少，彈得快併的就多。
+  // dev 開關「一下一切片」只關掉 ②：真人演奏的 MIDI 一個和弦散在好幾個 tick，連 ① 都關掉的話每個音都要按一下，估速被拉到區間下限、合奏幾乎不動（2026-11-19 查 R2-16）。
+  // 回傳這一組的結束（不含）。
   _groupEnd(p, j, rate, source) {
-    if (this._modeOf(source).oneSlice) return j + 1;   // dev 開關：一下一個切片，不分組
-    const segs = p.plan.driverSegs, minSec = minPressIntervalSec(source), spanSec = maxGroupSpanSec(source), headSec = this._secOf(segs[j].ticks);
+    const segs = p.plan.driverSegs, oneSlice = this._modeOf(source).oneSlice;
+    const minSec = minPressIntervalSec(source), spanSec = maxGroupSpanSec(source), headSec = this._secOf(segs[j].ticks);
     let m = j + 1;
-    while (m < segs.length && (this._secOf(segs[m].ticks) - this._secOf(segs[m - 1].ticks)) / rate < minSec
-      && (this._secOf(segs[m].ticks) - headSec) / rate < spanSec) m++;
+    while (m < segs.length) {
+      const gap = this._secOf(segs[m].ticks) - this._secOf(segs[m - 1].ticks);
+      if (!(gap < CHORD_SPREAD_S || (!oneSlice && gap / rate < minSec && (this._secOf(segs[m].ticks) - headSec) / rate < spanSec))) break;
+      m++;
+    }
     return m;
   }
 

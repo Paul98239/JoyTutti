@@ -9,14 +9,22 @@ export const MAX_PLAYBACK_RATE = 64;
 
 // 每首歌的速度區間：兩次按鍵的真實間隔容許在 [PRESS_PERIOD_MIN_S, PRESS_PERIOD_MAX_S]。下界 0.06 秒 ≈ 16.7 下/秒（持續連按的上限）；
 // 上界 30 秒：更久的空檔一律當成停手，不是你很慢（使用者決定）。這首歌的典型起音間隔 g（樂譜秒）對應 [g / 30, g / 0.06]，任何新 MIDI 都自動有合適的區間。
-// 比 PRESS_PERIOD_MIN_S 還短的起音間隔不算典型間隔：按不及，放行時併成一下按（近距起音分組，scheduler.js）；算進去會把中位數壓小、上限低於原速。
+// 比 PRESS_PERIOD_MIN_S 還短的起音間隔不算典型間隔：算進去會把中位數壓小、上限低於原速（和弦錯位與快音；放行時多半被近距起音分組併掉，見下面）。
+// 這個 0.06 只決定速度區間，跟近距分組的門檻已經分開（2026-11-19）；「16.7 下/秒」沒有出處（Repp 2005 的連按上限約 8 下/秒），區間上限偏寬，沒改。
 export const PRESS_PERIOD_MIN_S = 0.06;
 export const PRESS_PERIOD_MAX_S = 30;
 
-// 近距起音分組的門檻：一個輸入來源連按兩下最短隔多久（秒），更近的起音放行時併成一組（scheduler.js）。鍵盤＝PRESS_PERIOD_MIN_S；
-// 手勢＝0.3：2026-10-19 單人手測（與鍵盤混用）57 個連續有效揮手間隔的 p5 是 0.30 秒，只有一份錄音；其他來源先用鍵盤的值。
-const MIN_PRESS_INTERVAL_S = { keyboard: PRESS_PERIOD_MIN_S, gesture: 0.3 };
-export const minPressIntervalSec = (source) => MIN_PRESS_INTERVAL_S[source] ?? PRESS_PERIOD_MIN_S;
+// 近距起音分組有兩層（scheduler.js 的 _groupEnd），兩層任一成立就併進同一下：
+// ① 和弦內的時間差：相鄰兩個起音的樂譜間隔（秒，不除以速度：錯位是檔案本身的性質，演奏者彈慢它也還是同一個和弦）小於 CHORD_SPREAD_S。
+//   真人演奏的 MIDI 裡同一個和弦的音不會同一個 tick。0.05：corpus/asap 1063 份真人演奏對齊樂譜，固定 50 ms 時樂譜上同一下沒併到 4.1%、不同下被併 7.4%
+//   （40／60 ms：6.2%／5.4%、3.0%／10.6%；依每首估分界沒有比固定值好，2026-11-19 使用者決定固定 50 ms）。所有輸入來源都用，一下一切片也照用。
+export const CHORD_SPREAD_S = 0.05;
+// ② 按不及：一個輸入來源連按兩下最短隔多久（真實秒＝樂譜間隔 ÷ 目前速度），更近的起音由電腦依時間差放出。
+//   鍵盤 0.125：Repp 2005（docs/paper，第 2 節）單指連按上限每秒 5～7 下（150～200 ms）、受過音樂訓練者的同步下限 100～120 ms；
+//   corpus/recordings 鍵盤相鄰兩下 P1 109 ms、P5 151 ms；MusicXML 有裝飾音的 10 首 leave-one-out 選出 0.125（8 次）。
+//   手勢 0.3：2026-10-19 單人手測（與鍵盤混用）57 個連續有效揮手間隔的 p5 是 0.30 秒，只有一份錄音；其他來源用鍵盤的值。
+const MIN_PRESS_INTERVAL_S = { keyboard: 0.125, gesture: 0.3 };
+export const minPressIntervalSec = (source) => MIN_PRESS_INTERVAL_S[source] ?? MIN_PRESS_INTERVAL_S.keyboard;
 // 組的長度上限（起音距組頭的真實秒數）：手勢＝它的最短間隔，更遠的起音下一次揮手就按得到，不併進來；沒有條目（鍵盤）＝不設上限。
 // 只看相鄰間隔時，連續的快音整串併成一組（手測：222 個起音、64 秒），早按時整組被跳過、估速被推到上限，越併越大。
 const MAX_GROUP_SPAN_S = { gesture: MIN_PRESS_INTERVAL_S.gesture };

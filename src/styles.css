@@ -65,7 +65,7 @@ body, html {
   font-family: system-ui, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
 }
 /* 舞台背景（2026-11-19 從 #stage-blackout 移到 body）：攝影機畫面已經不畫了，背景不必再是蓋住畫面的不透明遮罩，直接鋪滿整個視窗（不限 16:9），
-   16:9 的框（#camera-frame）透明、沒有邊框，只負責把骨架裁在裡面，框的邊界就看不見了。
+   16:9 的框（#camera-frame）透明，只負責把骨架裁在裡面，邊界靠它的細框線標出來。
    三層放射漸層由上到下疊：地板一圈琥珀色的光、上方一盞柔和的聚光、整體中間亮四角暗。 */
 body {
   background:
@@ -104,13 +104,17 @@ body {
 
 /* 「視窗裝得下的最大 16:9 方框」：寬度取「視窗寬」與「視窗高 × 16/9」的較小者，aspect-ratio 由寬度推出高度；鎖 16:9 讓 F11 進出全螢幕時只是等比例縮放，框內 object-fit:cover 每次裁切都一致。
    不用 max-width/max-height + aspect-ratio：在 flex 版面裡兩軸都沒有定值會整個塌成 0 高。
-   透明、沒有邊框（2026-11-19）：舞台背景在 body、鋪滿整個視窗，這個框只負責把骨架（跟推論的畫面同比例）裁在 16:9 裡，邊界看不見。 */
+   背景透明：舞台背景在 body、鋪滿整個視窗，這個框只負責把骨架（跟推論的畫面同比例）裁在 16:9 裡。
+   1px 暖色細框線標出邊界（2026-11-20 使用者選定；2026-11-19 拿掉邊框後看不出 16:9 在哪）：疊在舞台邊緣的中間調上對比約 3.1:1（WCAG 非文字元件 3:1），
+   （WCAG 2.x 相對亮度公式算，2026-11-20）。圓角 0.6em 同第一輪的外框。 */
 #camera-frame {
   position: relative;      /* #stage-hint 以此為定位基準；頂端 pill／控制列在框外的 #top-center-stack */
   width: min(100vw, 100vh * 16 / 9);
   aspect-ratio: 16 / 9;
   overflow: hidden;
   background: transparent;
+  border: 1px solid rgba(255, 214, 170, .40);
+  border-radius: 0.6em;
 }
 
 /* 頂端置中疊層：播放 pill（左端是「選歌」）在上、系統控制列在下，選歌面板釘在整個疊層正下方（.tl-popup 以這裡為定位基準：position:fixed 也是 absolute 子元素的參照）。
