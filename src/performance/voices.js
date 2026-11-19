@@ -379,6 +379,13 @@ export function holdOf(note, driverTicks, fromIndex, holdCapTicks, secOf) {
   return null;
 }
 
+// 讀法 B（dev 開關 holdToNext）：不管檔案裡的音長，hold 到起音之後的下一個 driver 起音（游標 fromIndex 起算），收在按下那一刻、不留尾巴。
+// 後面沒有起音（他的最後一組）回 null：照檔案音長收。
+export function nextOnsetHold(note, driverTicks, fromIndex) {
+  for (let c = Math.max(0, fromIndex); c < driverTicks.length; c++) if (driverTicks[c] > note.startTick) return { tick: driverTicks[c], tailSec: 0 };
+  return null;
+}
+
 export class VoiceLedger {
   constructor(router, events) {
     this._router = router;      // 所有合成器呼叫都經過它（voices.js）
@@ -402,14 +409,16 @@ export class VoiceLedger {
   // onTime 記下那顆 noteOn 的 AudioContext 時間（沒帶＝undefined）。holdScope／holdTicks／holdFrom＝這顆音的 hold 歸誰、等哪一串起音、從哪個游標起算；
   // rate＝目前速度、fromTick＝由 tick() 放出（遲到統計只算這種，見 scheduler.js）、clockMs＝排程器時鐘、timed＝你的合成器也照 lookahead 帶時間戳（近距起音分組被併入的音）。
   // keyup 模式（mode 不是 null，見 scheduler.js 的 keyupOf()）：你的音不做 hold；mode.key 有值的音（組頭）不排收音（Infinity），等這個鍵放開（releaseKey），mode.key 是 null 的照 offMs 收。
-  sound(staff, note, offMs, dueMs, { holdScope, holdTicks, holdFrom, rate, fromTick, clockMs, timed = false, mode = null }) {
+  // holdToNext（scheduler.js 的 dev 開關 cfg.modes 的讀法 B，只會對演奏者自己的音傳 true）：不用 holdOf()，一律 hold 到他的下一個起音、收在按下那一刻（nextOnsetHold）；
+  // 比下一個起音長的音也在那裡收，不撐到更後面的起音（2026-11-19 code review 發現原本先問 holdOf()，長音會帶著 tailSec 撐過下一下）。
+  sound(staff, note, offMs, dueMs, { holdScope, holdTicks, holdFrom, rate, fromTick, clockMs, timed = false, mode = null, holdToNext = false }) {
     const opts = timed ? this._router.stampTime(dueMs) : this._router.stamp(staff, dueMs);
     this._capOverlaps(staff, note, dueMs, rate, clockMs, opts?.time);
     let queue = staff.sounding.get(note.midiNote);
     if (!queue) staff.sounding.set(note.midiNote, (queue = []));
     // hold：結尾接著、或橫跨某個還沒放行的 driver 起音的音（你的與電腦的一樣），先不排收音（Infinity），等你按到那個起音才收（releaseHeld）；
     // tailSec＝檔案裡那個起音到結尾的樂譜秒數。被同譜表新音截短過的不再 hold（見 _capOverlaps）
-    const hold = mode ? null : this.holdOf(note, holdTicks, holdFrom);
+    const hold = mode ? null : holdToNext ? nextOnsetHold(note, holdTicks, holdFrom) : this.holdOf(note, holdTicks, holdFrom);
     const waitKey = mode?.key ?? null;
     queue.push({
       endTick: note.endTick, offMs: hold || waitKey !== null ? Infinity : offMs, holdTick: hold ? hold.tick : null, holdScope: hold ? holdScope : null,

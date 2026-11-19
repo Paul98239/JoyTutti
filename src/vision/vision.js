@@ -1,4 +1,4 @@
-// vision.js — 攝影機、WebGL 視訊與骨架繪製、姿勢模型生命週期；逐幀呼叫追蹤（tracking.js）與手勢（gesture.js），送出手勢狀態（main.js 註冊 input/gestureTrigger.js 接收）
+// vision.js — 攝影機、骨架繪製、姿勢模型生命週期（攝影機畫面不顯示，只當推論來源；2026-11-19 拿掉 WebGL 視訊背景）；逐幀呼叫追蹤（tracking.js）與手勢（gesture.js），送出手勢狀態（main.js 註冊 input/gestureTrigger.js 接收）
 
 import { PersonTracker, buildDetection } from "./tracking.js";
 import {
@@ -204,7 +204,6 @@ function emitGesturePerformanceState(state, nowMs) {
 const useRVFC = "requestVideoFrameCallback" in HTMLVideoElement.prototype;
 
 const video = document.getElementById("webcam");
-const glCanvas = document.getElementById("gl-canvas");
 const overlayCanvas = document.getElementById("overlay-canvas");
 const ctx2d = overlayCanvas.getContext("2d");
 
@@ -219,9 +218,6 @@ let inFlight = null;            // 送進 Worker、還沒拿到結果的那一�
 let pendingFrame = null;        // 等結果期間又來的新畫面（只記最新一張的拍下時刻）：結果一回來就送，不等下一次 rVFC
 let configureSeq = 0;           // 換人數的請求編號：等待期間又選了別的人數，舊的這次不算數
 const pendingCalls = new Map(); // Worker 請求編號 → { resolve, reject }
-let gl = null;      // WebGL context
-let glTexture = null;      // video texture
-let glProgram = null;      // shader program
 let consecutiveFrameErrors = 0; // 連續幀處理失敗計數，超過 FRAME_ERROR_THRESHOLD 才視為持續性錯誤
 let lastProcessedVideoTime = -1; // 上一次真的送去推論的 video.currentTime（rAF 降級路徑用來跳過重複幀）
 let currentPoseCount = 0; // 目前使用中的 landmarker 的 numPoses；0 ＝ 還沒建過任何一份
@@ -241,134 +237,14 @@ let cameraOffReason = "";         // 關閉時舞台提示的文字；"" ＝ 使
 let cameraOp = Promise.resolve(); // start／stop／ended 序列化用的 promise 鏈
 let cameraStateListener = null;
 
-const VERT_SRC = `
-  attribute vec2 a_position;
-  attribute vec2 a_texCoord;
-  varying   vec2 v_texCoord;
-  void main() {
-    gl_Position = vec4(a_position, 0.0, 1.0);
-    // 水平鏡像：翻轉 U 軸
-    v_texCoord = vec2(1.0 - a_texCoord.x, a_texCoord.y);
-  }
-`;
-
-const FRAG_SRC = `
-  precision mediump float;
-  varying vec2 v_texCoord;
-  uniform sampler2D u_sampler;
-  void main() {
-    gl_FragColor = texture2D(u_sampler, v_texCoord);
-  }
-`;
-
-function compileShader(type, source) {
-  const shader = gl.createShader(type);
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    const log = gl.getShaderInfoLog(shader);
-    gl.deleteShader(shader);
-    throw new Error(`Shader 編譯失敗：${log}`);
-  }
-  return shader;
-}
-
-function initWebGL() {
-  gl = glCanvas.getContext("webgl", {
-    alpha: false,              // 不需要透明（底層畫布）
-    desynchronized: true,      // 低延遲提示
-    antialias: false,          // 視訊不需要 AA
-    powerPreference: "high-performance"
-  });
-
-  if (!gl) throw new Error("WebGL 不可用");
-
-  gl.clearColor(0, 0, 0, 1);
-
-  const vert = compileShader(gl.VERTEX_SHADER, VERT_SRC);
-  const frag = compileShader(gl.FRAGMENT_SHADER, FRAG_SRC);
-
-  glProgram = gl.createProgram();
-  gl.attachShader(glProgram, vert);
-  gl.attachShader(glProgram, frag);
-  gl.linkProgram(glProgram);
-
-  if (!gl.getProgramParameter(glProgram, gl.LINK_STATUS)) {
-    throw new Error("Shader 連結失敗：" + gl.getProgramInfoLog(glProgram));
-  }
-
-  gl.useProgram(glProgram);
-  gl.deleteShader(vert);
-  gl.deleteShader(frag);
-
-  // 全螢幕四邊形頂點：position (clip-space) + texCoord (UV)
-  const vertices = new Float32Array([
-    -1, -1, 0, 1,
-    1, -1, 1, 1,
-    -1, 1, 0, 0,
-    1, 1, 1, 0,
-  ]);
-
-  const vbo = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-  gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-
-  const aPos = gl.getAttribLocation(glProgram, "a_position");
-  const aTex = gl.getAttribLocation(glProgram, "a_texCoord");
-
-  gl.enableVertexAttribArray(aPos);
-  gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 16, 0);
-
-  gl.enableVertexAttribArray(aTex);
-  gl.vertexAttribPointer(aTex, 2, gl.FLOAT, false, 16, 8);
-
-  glTexture = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, glTexture);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-  gl.uniform1i(gl.getUniformLocation(glProgram, "u_sampler"), 0);
-}
-
-// GPU driver 重置／分頁長時間背景化可能造成 WebGL context 遺失；不 preventDefault() 瀏覽器就不會嘗試恢復，恢復後重新 initWebGL() 重建 shader／texture／buffer。
-glCanvas.addEventListener("webglcontextlost", (e) => {
-  e.preventDefault();
-  console.warn("⚠️ WebGL context 遺失，等待瀏覽器恢復…");
-});
-glCanvas.addEventListener("webglcontextrestored", () => {
-  try { initWebGL(); } catch (err) { showError("WebGL 恢復失敗", String(err)); }
-});
-
-// 畫布尺寸跟著實際視訊尺寸走；#canvas-container 滿版、子 canvas 是 object-fit:cover，裁切由 CSS 處理，不需要 JS 介入。
+// 骨架畫布尺寸跟著實際視訊尺寸走（推論座標是 0～1 的比例，乘上這個尺寸畫）；#canvas-container 滿版、canvas 是 object-fit:cover，裁切由 CSS 處理，不需要 JS 介入。
 function syncCanvasSize() {
   const vw = video.videoWidth || CONFIG.width;
   const vh = video.videoHeight || CONFIG.height;
-
-  if (glCanvas.width !== vw || glCanvas.height !== vh) {
-    glCanvas.width = vw;
-    glCanvas.height = vh;
+  if (overlayCanvas.width !== vw || overlayCanvas.height !== vh) {
     overlayCanvas.width = vw;
     overlayCanvas.height = vh;
-    gl.viewport(0, 0, vw, vh);
   }
-}
-
-function uploadVideoTexture(source) {
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, glTexture);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
-}
-
-// source："sent"＝畫送出推論前已上傳的那一張（sendFrame）；"live"＝沒有推論時，上傳 <video> 當下這張再畫
-function renderVideoGL(source) {
-  if (source === "live") uploadVideoTexture(video);
-  else {
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, glTexture);
-  }
-  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
 
 function isFacePoint(i) { return i >= 0 && i <= 10; }
@@ -401,7 +277,7 @@ function renderSkeletonOverlay(activeTracks) {
 
   ctx2d.save();
   ctx2d.translate(W, 0);
-  ctx2d.scale(-1, 1); // 水平鏡像（與 WebGL shader 一致）
+  ctx2d.scale(-1, 1); // 水平鏡像：演奏者看骨架像照鏡子（左手在畫面左邊）
   ctx2d.lineCap = "round";   // 光暈線很寬，平頭的話線段端點會切成方塊
   ctx2d.lineJoin = "round";
 
@@ -527,9 +403,9 @@ function processFrame(_now, metadata) {
       if (inFlight) pendingFrame = { captureTime };
       else sendFrame(captureTime);
     } else {
-      // ▶ 還沒選「現場人數」或模型還沒建好就不推論；其餘管線照跑：tracker.update([]) 讓舊 track 自然過期、心跳照送 presentSlots: []、攝影機畫面照畫（不凍結）。
+      // ▶ 還沒選「現場人數」或模型還沒建好就不推論；其餘管線照跑：tracker.update([]) 讓舊 track 自然過期、心跳照送 presentSlots: []。
       const nowMs = performance.now();
-      runPipeline(nowMs, nowMs, [], 0, captureTime === null ? null : nowMs - captureTime, null, null, [], "live");
+      runPipeline(nowMs, nowMs, [], 0, captureTime === null ? null : nowMs - captureTime, null, null, []);
     }
   } catch (err) {
     frameFailed(err);
@@ -554,13 +430,9 @@ function sendFrame(captureTime) {
   inFlight = { ts, captureTime, captureLagMs: captureTime === null ? null : ts - captureTime, detectorRan: lastRawCount < currentPoseCount ? 1 : 0 };
   const source = forgetTracking ? new ImageData(video.videoWidth || CONFIG.width, video.videoHeight || CONFIG.height) : video;
   forgetTracking = false;
-  const blank = source !== video;
   createImageBitmap(source).then(
     (bitmap) => {
       if (isLoopStopped || !poseWorker) { bitmap.close(); inFlight = null; return; }
-      // 背景要畫送去推論的這一張（結果回來時 renderVideoGL("sent")），骨架才跟畫面裡的手是同一個瞬間；bitmap 交給 Worker 之後就不能用，所以先上傳。
-      // 空白畫面（重置 ID、重開鏡頭）那一次改傳當下的畫面：貼圖裡可能還是關鏡頭之前的舊畫面；這一幀追蹤層沒有可畫的骨架，不會不同步
-      uploadVideoTexture(blank ? video : bitmap);
       poseWorker.postMessage({ type: "detect", bitmap, ts }, [bitmap]);
     },
     (err) => { inFlight = null; frameFailed(err); },
@@ -582,7 +454,7 @@ function handlePoseResult({ ts, inferMs, landmarks, worldLandmarks }) {
 }
 
 // 偵測結果到了之後的管線。ts＝這張畫面的時刻（追蹤與手勢的時間基準），startMs＝主執行緒開始處理的時刻（逐幀紀錄的主執行緒耗時從這裡算）。
-function runPipeline(ts, startMs, rawPoses, detectMs, captureLagMs, detectorRan, resultLagMs, rawWorlds = [], videoSource = "sent") {
+function runPipeline(ts, startMs, rawPoses, detectMs, captureLagMs, detectorRan, resultLagMs, rawWorlds = []) {
   // ▶ 依位置將偵測結果匹配到已鎖定的槽位（並平滑），演算法見 tracking.js。buildDetection 對座標異常／不像人的偵測回傳 null 先濾掉；同一具身體的重複偵測由 tracker.update() 自己挑該留哪一筆。
   const aspect = (video.videoHeight || CONFIG.height) / (video.videoWidth || CONFIG.width);
   const detections = rawPoses.map((lm, i) => buildDetection(lm, { world: rawWorlds[i] ?? null, aspect })).filter(Boolean);
@@ -594,9 +466,6 @@ function runPipeline(ts, startMs, rawPoses, detectMs, captureLagMs, detectorRan,
   // 最低點的時刻用這張畫面被拍下的時刻（rVFC 的 captureTime；瀏覽器沒提供就用 ts）：揮手的動作時刻，排程器拿來估速、比先後
   const gesture = updateGestures(activeTracks, tracker.cfg.maxUsers, ts, captureLagMs === null ? ts : ts - captureLagMs);
   emitGesturePerformanceState(gesture, ts);
-
-  // ▶ WebGL 渲染攝影機畫面當背景：有推論時是送去推論的那一張，沒推論時是當下這張
-  renderVideoGL(videoSource);
 
   // ▶ 2D 覆蓋層繪製骨架（漏偵測一兩幀的人用最後一次的骨架撐住，見 tracking.js 的 getDrawableTracks）
   renderSkeletonOverlay(tracker.getDrawableTracks(ts));
@@ -733,7 +602,6 @@ function detachCamera(reason) {
   // srcObject 為 null 時 <video> 依規格什麼都不呈現；Firefox 有「最後一幀黏住」的回報，多加 class 讓 CSS 藏起來當保險（用 visibility 不是 display:none——之後還要靠這個元素跑 rVFC）
   video.classList.add("is-off");
   cameraOffReason = reason;
-  try { gl?.clear(gl.COLOR_BUFFER_BIT); } catch (e) { /* context 可能正在遺失 */ }
   ctx2d.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
   resetGestures();
   forgetTracking = true;
@@ -831,9 +699,6 @@ function callPoseWorker(msg) {
 
 async function initSystem() {
   try {
-    setStatus("正在初始化 WebGL 渲染引擎⋯");
-    initWebGL();
-
     setStatus("正在載入 WASM 視覺模組⋯");
     await startPoseWorker();
 
@@ -965,13 +830,6 @@ window.addEventListener("beforeunload", () => {
   cameraStream?.getTracks().forEach((t) => t.stop());
   poseWorker?.terminate();
   poseWorker = null;
-
-  if (gl) {
-    gl.deleteTexture(glTexture);
-    gl.deleteProgram(glProgram);
-    const ext = gl.getExtension("WEBGL_lose_context");
-    ext?.loseContext();
-  }
 });
 
 // 啟動攝影機與姿勢偵測。必須由 main.js 明確呼叫 startVision()，不靠模組頂層的 import 副作用（那樣「攝影機會不會開」會取決於有沒有人 import 到這個檔案，搬動 import 就默默黑畫面）。

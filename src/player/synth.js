@@ -95,7 +95,8 @@ export class PreviewPlayer {
       };
       seq.eventHandler.addEvent('songChange', EVENT_ID, ({ midiData }) => { if (midiData?.fileName === name) settle(); });
       seq.eventHandler.addEvent('midiError', EVENT_ID, (err) => settle(fail('parse', err?.message || '官方解析器拒絕這首 MIDI')));
-      // 官方對「長度 0 秒」的 MIDI 既不回 songChange 也不回 midiError，沒有逾時會永遠卡在載入中。
+      // 逾時：官方沒回 songChange 也沒回 midiError 時，不設上限會永遠卡在載入中。4.3.14 對「長度 0 秒」的 MIDI 就是這樣（worklet 檢查到長度 0 直接 return）；
+      // 4.4.8 的 worklet 改成先發 songChange 再檢查長度（2026-11-19 對照兩版 spessasynth_processor.min.js），這種檔已會回應，逾時留著防其他沒有回應的情況。
       timer = setTimeout(() => settle(fail('timeout', '官方播放器沒有回應')), this._timeoutMs);
       this._abort = settle;
     });
@@ -146,12 +147,12 @@ function channelCountOf(s) {
   return s ? portCount * CHANNELS_PER_PORT : CHANNELS_PER_PORT;
 }
 
-// 補 channel 到至少 ports 個 port（只增不減，同官方 Sequencer 的 addNewMIDIPort），補完整個合成器重設一次（理由見 initEngine()）。要在送任何初始 patch 之前呼叫
+// 補 channel 到至少 ports 個 port（只增不減，同官方 Sequencer 的 addNewMIDIPort）。要在送任何初始 patch 之前呼叫。
+// 補完不再整個合成器 reset（2026-11-19 拿掉，理由見 initEngine()）：reset 會先停掉所有音，播放中改指派又剛好要補 port 時會切掉正在響的音。
 function ensurePorts(ports) {
   if (!synth || !synthHuman || ports <= portCount) return;
   for (const s of [synth, synthHuman]) {
     for (let i = portCount * CHANNELS_PER_PORT; i < ports * CHANNELS_PER_PORT; i++) s.addNewChannel();
-    s.reset();
   }
   portCount = ports;
   scheduler.setPortCount(portCount);
@@ -227,12 +228,10 @@ export async function initEngine() {
       // 4.3.14 時期在 soundBank 之前加會噴「No preset found for DRUM:0!」；core 4.4.10 的預設 onMissingPreset 在還沒有任何音色庫時不警告（原始碼查證，2026-11-18）。
       portCount = DEFAULT_PORTS;
       scheduler.setPortCount(portCount);
+      // 4.3.14（core 4.3.20）動態新增的 channel 預設是打擊 channel，當時要在這裡 reset 一次設回 GM 配置。core 4.4.10 建 channel 時就 reset 成這個配置（setDrums(ch % 16 === 9)，原始碼查證，2026-11-18）；
+      // 2026-11-19 在測試瀏覽器用 getSnapshot() 比對「補 48 個 channel 後有 reset」與「沒有 reset」：64 個 channel 的 patch、打擊、全部 CC、彎音、channel 參數完全相同，所以拿掉 reset。
       for (const s of [synth, synthHuman]) {
         for (let i = CHANNELS_PER_PORT; i < portCount * CHANNELS_PER_PORT; i++) s.addNewChannel();
-        // 4.3.14（core 4.3.20）動態新增的 channel 預設是打擊 channel（worklet 回讀實測 channel 16～63 全是打擊），要靠這次 reset 設回 GM 配置（只有每個 port 的 channel 9 是打擊）。
-        // core 4.4.10 建 channel 時就 reset 成這個配置（setDrums(ch % 16 === 9)，原始碼查證，2026-11-18），這裡的 reset 已不是必要；升版先保留、行為不變，拿掉與否等實測後決定。
-        // 訊息有順序，reset 一定排在上面的 addNewChannel 之後才被 worklet 處理
-        s.reset();
       }
 
       isReady = true;
@@ -254,8 +253,9 @@ export async function initEngine() {
   return initPromise;
 }
 
-// 換歌／換指派／進出試聽前的清場：收掉排程器、試聽與殘響，bank／program 歸零（鼓組 channel 跳過：
-// 那裡的 program 是鼓組編號，不是旋律音色）。
+// 換歌／換指派／進出試聽前的清場：收掉排程器、試聽與殘響，bank／program 歸零（bank 歸零只送旋律 channel：鼓組 channel 的 program 是鼓組編號，不是旋律音色）。
+// CC120／121／123 每個 channel 都送，鼓組 channel 也是：MIDI 1.0 的 channel mode 訊息對所有 channel 有效；core 4.4.10 的 CC121 只重設 RP-015 那幾個控制器，
+// CC120／123 只停音，都不動 bank、program 與打擊設定（controller_change.ts、resetRP15()，2026-11-19 查原始碼）。
 export function flushPreviousSong() {
   scheduler.stop();
   previewPlayer?.stop();
@@ -265,10 +265,11 @@ export function flushPreviousSong() {
   for (const s of [synth, synthHuman]) {
     if (!s) continue;
     for (let ch = 0; ch < channelCountOf(s); ch++) {
-      if (isDrumChannelIndex(ch)) continue;
       try {
-        s.controllerChange(ch, CC.BANK_MSB, 0);
-        s.controllerChange(ch, CC.BANK_LSB, 0);
+        if (!isDrumChannelIndex(ch)) {
+          s.controllerChange(ch, CC.BANK_MSB, 0);
+          s.controllerChange(ch, CC.BANK_LSB, 0);
+        }
         s.controllerChange(ch, CC.ALL_SOUND_OFF, 0);
         s.controllerChange(ch, CC.RESET_ALL, 0);
         s.controllerChange(ch, CC.ALL_NOTES_OFF, 0);
@@ -290,8 +291,8 @@ export async function load(score, assignments) {
   isSongLoaded = true;
 }
 
-// 播放中（含暫停）改指派：不重新載入、不從頭，從目前位置接續（排程器的 reassign()）。歌曲需要的 port 變多就先補，補完 reset 過的
-// channel 由 reassign() 重送初始狀態。沒載入歌曲時不做事。
+// 播放中（含暫停）改指派：不重新載入、不從頭，從目前位置接續（排程器的 reassign()）。歌曲需要的 port 變多就先補，新 channel 的
+// 初始狀態由 reassign() 送。沒載入歌曲時不做事。
 export function reassign(score, assignments) {
   if (!isSongLoaded) return;
   ensurePorts(portsNeeded(score, assignments));

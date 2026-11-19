@@ -48,7 +48,7 @@ const LOADING_INDICATOR_DELAY_MS = 120; // 按播放後延遲這麼久才顯示 
  * @property {number} playerCount        系統控制 bar 選的「現場人數」；0 ＝ 還沒選
  * @property {number} positionSeconds    目前播放位置（演奏：樂譜原始秒數，同 note.startSeconds 座標系；試聽：官方 currentTime）；
  *                                       頂端進度條唯讀顯示用，沒有任何 seek 路徑會寫它
- * @property {number} previewDuration    試聽中這首的長度（秒，官方 duration）；進度條在試聽時拿它當分母，不在試聽是 0
+ * @property {number} previewDuration    試聽中這首的長度（秒，官方 duration）；試聽時我們的 parser 解析失敗才拿它當進度條分母（見 renderTopProgress），不在試聽是 0
  * @property {{ items: object[], categories: string[], query: string, category: string, status: 'idle' | 'searching' | 'ready' | 'empty' | 'error', selectedId: string }} library
  */
 export const playerStore = new Store(/** @type {PlayerState} */ ({
@@ -106,6 +106,40 @@ export function assignmentUnits(parts) {
     });
   }
   return parts.map((part) => ({ id: part.id, name: part.name }));
+}
+// 分譜清單的提示（2026-11-19，只顯示、不自動合併也不自動指派；parser 照規則切，「太細」交給使用者自己把幾個 part 指派給同一人）：
+//   · late：第一個音在全曲 25% 之後才出現的 part（lakh 全量約 18% 的 part 是這樣），名稱後面標「第 m:ss 進入」，選之前知道它很晚才有事做。25% 是暫定的 UI 門檻，沿用分譜稽核 R6 的切點
+//   · group：音色（主 staff 的 program）相同、軌名去掉結尾的數字與左右手標記後也相同的旋律 part（例如「Violin 1」「Violin 2」、「Piano RH」「Piano LH」）標同一個字母，
+//     可能是同一個樂器被分在不同 channel。軌名是自由文字（不採信它來切分，只拿來當提示）
+// 回傳 part id → { late: 進入秒數|null, group: 'A'|'B'…|null }；單一 part 拆譜表（assignmentUnits 的特例）時不標。超過 26 組時字母後面加輪次（A2、B2…）。
+// 依 score 快取：infoText() 每次重繪都會用到，播放中約每 200ms 重繪一次，score 不變結果就不變。
+const normTrackName = (s) => (s ?? '').toLowerCase().replace(/[\s_\-.:#()[\]{}'"]/g, '').replace(/(righthand|lefthand|rh|lh|left|right|[lr]|\d+)+$/g, '');
+const hintsCache = new WeakMap();   // score → partHints() 的結果
+export function partHints(score) {
+  if (!score || score.parts.length < 2) return new Map();
+  if (!hintsCache.has(score)) hintsCache.set(score, computePartHints(score));
+  return hintsCache.get(score);
+}
+function computePartHints(score) {
+  const hints = new Map();
+  const end = score.lastVoiceEventTick || 1;
+  const keyOf = new Map();
+  for (const part of score.parts) {
+    const main = [...part.staves].sort((a, b) => b.noteCount - a.noteCount)[0];
+    const name = normTrackName(score.tracks[main.trackIndex]?.name);
+    if (!main.percussionKit && name) keyOf.set(part.id, `${main.program}|${name}`);
+    hints.set(part.id, { late: part.startTick / end > 0.25 ? score.midiTicksToSeconds(part.startTick) : null, group: null });
+  }
+  const members = new Map();
+  for (const [id, key] of keyOf) { if (!members.has(key)) members.set(key, []); members.get(key).push(id); }
+  let letter = 0;
+  for (const ids of members.values()) {
+    if (ids.length < 2) continue;
+    const label = String.fromCharCode(65 + (letter % 26)) + (letter >= 26 ? String(Math.floor(letter / 26) + 1) : '');
+    letter++;
+    for (const id of ids) hints.get(id).group = label;
+  }
+  return hints;
 }
 const allUnitIds = () => assignmentUnits(playerStore.state.parts).map((u) => u.id);
 // 目前確實存在於 score 又被指派出去的單位 id。
@@ -404,12 +438,30 @@ function slotOfOption(value) {
 
 // 播放中（含暫停）改指派：不重新載入、不從頭，從目前位置接續。還沒播過、播完、試聽中、處理中，或沒有引擎裡的歌，就維持
 // 「下一次按頂端播放鍵時依簽章重新載入」。
-function reassignInPlace() {
+function canReassignInPlace() {
   const s = playerStore.state;
-  if (lastPlayedSignature === null || s.mode !== 'perform' || isSongLoading || endHandled || !s.source || !s.score) return;
+  return !(lastPlayedSignature === null || s.mode !== 'perform' || isSongLoading || endHandled || !s.source || !s.score);
+}
+function reassignInPlace() {
+  if (!canReassignInPlace()) return;
+  const s = playerStore.state;
   synth.reassign(s.score, [...s.assignments]);   // 傳快照（[單位 id, 槽位][]），跟 synth.load() 一樣
   lastPlayedSignature = buildPlaybackSignature(s.source);
 }
+
+// 1-B 的 dev 開關（scheduler.js 的 cfg.modes；devStats.js 的 __tryMode() 用，2026-11-19 加）。source＝'keyboard'｜'gesture'，patch 例如 { oneSlice: true }。
+// 排程器只在 load()／reassign() 讀開關：播放中（含暫停）就地重建、從目前位置接續（同改指派）；其他狀態讓下一次 ▶ 重新載入。回傳改完的開關。
+// 載入／處理中直接丟錯、不改：那時 scheduler.load() 可能已讀過舊開關，載入完成又會把簽章寫回，改動會被默默吃掉（2026-11-19 code review 發現）。
+export function setDevModes(source, patch) {
+  if (isSongLoading) throw new Error('載入或處理中，等播放開始後再切換');
+  const cur = synth.scheduler.cfg.modes;
+  if (!(source in cur)) throw new Error(`來源只有 ${Object.keys(cur).join('／')}`);
+  synth.scheduler.cfg = { ...synth.scheduler.cfg, modes: Object.freeze({ ...cur, [source]: Object.freeze({ ...cur[source], ...patch }) }) };
+  if (canReassignInPlace()) reassignInPlace();
+  else lastPlayedSignature = null;   // 沒辦法就地重建：下一次 ▶ 一定重新載入
+  return synth.scheduler.cfg.modes;
+}
+export const devModes = () => synth.scheduler.cfg.modes;
 
 // 指派演奏者下拉：更新 assignments。順序不拘——什麼時候改都即時處理（播放中從目前位置接續，否則下次 ▶ 重新載入）。
 function assignPart(unitId, value) {
@@ -502,6 +554,7 @@ export function startPlayer() {
 // 歌名只放歌名（notice 覆蓋時例外），不寫「解析中／下載中」；優先單行，超長才縮小字級。
 const pill = document.getElementById('toolbar-playback');
 const transportGroup = document.getElementById('transport-group');
+const songToggle = document.getElementById('song-toggle');   // pill 左端的「選歌」（2026-11-19 從控制列移來），分給歌名的寬度要扣掉它
 const btnPlay = document.getElementById('btnPlay');
 const btnPause = document.getElementById('btnPause');
 const btnReplay = document.getElementById('btnReplay');
@@ -518,8 +571,10 @@ const MIN_SONG_TITLE_SCALE = 0.6;
 function fitSongTitle() {
   statusText.classList.remove('allow-wrap');
   statusText.style.setProperty('--song-title-scale', '1');
-  const gapPx = parseFloat(getComputedStyle(pill).columnGap) || 0;
-  const available = pill.clientWidth - transportGroup.offsetWidth - gapPx;
+  const cs = getComputedStyle(pill);
+  const gapPx = parseFloat(cs.columnGap) || 0;
+  const padPx = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);   // clientWidth 含內距，要扣掉
+  const available = pill.clientWidth - padPx - songToggle.offsetWidth - transportGroup.offsetWidth - 2 * gapPx;
   const natural = statusText.scrollWidth;
   if (available <= 0 || natural <= available) return;
   const scale = Math.max(MIN_SONG_TITLE_SCALE, available / natural);
@@ -587,8 +642,11 @@ function renderTransportPill({ player }) {
 // （loadScore() 開頭的 clearScore()）而收起，免得每次換歌都閃一次——value 在空窗期暫時停在舊值，「沒人觸發時停住不動」的原則不變。
 let hasShownProgress = false;
 function renderTopProgress({ player }) {
-  // 試聽時分母是官方 duration（我們的 parser 即使解析失敗，試聽仍可用）。
-  const total = player.mode === 'preview' ? player.previewDuration : (player.score?.durationSeconds || 0);
+  // 試聽時分母是官方 duration 的同一個定義（最後一個 channel 事件的秒數），但用我們的速度表算：core 4.4.10 的速度表在速度事件分散多軌時沒排序，
+  // duration 會算錯（lakh 41 檔，例如 Judy in Disguise 算成 −394.6 秒）；官方播放本身照事件順序換算，不受影響。我們的 parser 解析失敗時才用官方 duration。
+  const total = player.mode === 'preview'
+    ? (player.score ? player.score.midiTicksToSeconds(player.score.lastVoiceEventTick) : player.previewDuration)
+    : (player.score?.durationSeconds || 0);
   if (total > 0) hasShownProgress = true;
   topProgressBar.hidden = !hasShownProgress;
   if (total > 0) {
@@ -784,10 +842,13 @@ const songPanelFields = {
   'part-assign': (el) => assignPart(el.dataset.partId, el.value),
 };
 
-function buildPartRow(unit, playerCount) {
+function buildPartRow(unit, playerCount, hint) {
   const row = partRowTemplate.content.firstElementChild.cloneNode(true);
   row.dataset.partId = unit.id;
-  setMarqueeText(row.querySelector('.score-part-name'), unit.name);
+  const notes = [];
+  if (hint?.group) notes.push(`同組 ${hint.group}`);
+  if (hint?.late != null) notes.push(`第 ${formatTime(hint.late)} 進入`);
+  setMarqueeText(row.querySelector('.score-part-name'), notes.length ? `${unit.name}（${notes.join('・')}）` : unit.name);
   const select = row.querySelector('.score-part-id');
   select.dataset.partId = unit.id;
   select.append(new Option('無', ''), new Option('PC 鍵盤手', KEYBOARD_SLOT));
@@ -797,7 +858,9 @@ function buildPartRow(unit, playerCount) {
 
 function infoText({ score }) {
   if (!score) return '';
-  return `${score.parts.length} 個聲部・${formatTime(score.durationSeconds)}・${Math.round(score.tempoMap[0].bpm)} BPM`;
+  const base = `${score.parts.length} 個聲部・${formatTime(score.durationSeconds)}・${Math.round(score.tempoMap[0].bpm)} BPM`;
+  // 有「同組」提示時說明一次它的意思（每列只標字母，免得每列都很長）
+  return [...partHints(score).values()].some((h) => h.group) ? `${base}。標「同組」的聲部音色與軌名相同，可能是同一個樂器，可以指派給同一個人` : base;
 }
 
 let renderedParts = null;
@@ -817,7 +880,8 @@ function renderSongPanel({ player }) {
   if (player.parts !== renderedParts || player.playerCount !== renderedPlayerCount) {
     renderedParts = player.parts;
     renderedPlayerCount = player.playerCount;
-    scorePartList.replaceChildren(...assignmentUnits(player.parts).map((unit) => buildPartRow(unit, player.playerCount)));
+    const hints = partHints(player.score);
+    scorePartList.replaceChildren(...assignmentUnits(player.parts).map((unit) => buildPartRow(unit, player.playerCount, hints.get(unit.id))));
   }
   for (const sel of scorePartList.querySelectorAll('.score-part-id')) {
     const assigned = player.assignments.get(sel.dataset.partId);   // 1~4、KEYBOARD_SLOT 或 undefined

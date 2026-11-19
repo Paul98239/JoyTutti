@@ -4,7 +4,7 @@
 
 import { rateBoundsFor } from './tempo.js';
 import { holdCapTicksFor, holdGapTolerance } from './voices.js';
-import { byFileOrder, GM_DEFAULT_MIXER, isPercussionBank } from '../midi/midiParser.js';
+import { byFileOrder, GM_DEFAULT_MIXER, BANK_MSB_RHYTHM, BANK_MSB_MELODY } from '../midi/midiParser.js';
 
 // 一個 part 的 staff 規格：沒有 staves 的 part（手工組的舊資料形狀）視為單一 staff，id 沿用 part.id
 export function staffSpecsOf(part) {
@@ -71,9 +71,12 @@ function buildStaves(score, assignments, router) {
   return { staves, unplaced };
 }
 
-// 播放中途的 bank select 若會讓輸出 channel 在打擊與旋律之間互換（打擊的判定同 parser 的 isPercussionBank()：MSB 120／121 才改變角色，其他值不變），不送到這個譜表：
+// 播放中途的 bank select 若會讓輸出 channel 在打擊與旋律之間互換（GM2 §2.4／§3.3.1：MSB 120／121 才改變角色，其他值維持這個譜表目前的角色），不送到這個譜表：
 // 輸出 channel 是依打擊／旋律分配的，中途互換要重新分配（不做，見 buildControls 的警告）。
-export const switchesKit = (staff, ev) => ev.type === 'controlChange' && ev.data1 === 0 && isPercussionBank(ev.value, staff.sourceChannel) !== staff.percussionKit;
+// 跟譜表自己的 percussionKit 比，不重算 isPercussionBank(值, channel)：那會把「其他值」當成回到第 10 個 channel 的預設角色，被 GS／XG 切換過角色的譜表
+// （parts.js 的 percussionSwitches()）途中送 CC0=0、8、127 這類一般的 bank 也會被當成互換而丟掉（2026-11-19 code review 發現）。
+export const switchesKit = (staff, ev) => ev.type === 'controlChange' && ev.data1 === 0
+  && (ev.value === BANK_MSB_RHYTHM ? !staff.percussionKit : ev.value === BANK_MSB_MELODY && staff.percussionKit);
 
 // 狀態補送（chase）不送 tick 0 的 bank select／program change：tick 0 的音色是初始音色的事（staff.program／bank），從控制器軌重送可能矛盾
 const isPatchEvent = (ev) => ev.type === 'programChange' || (ev.type === 'controlChange' && (ev.data1 === 0 || ev.data1 === 32));

@@ -104,14 +104,15 @@ function applyUiFontSize() {
   document.documentElement.style.setProperty('--ui-fs', `${preferred / zoom}px`);
 }
 
-// 選歌面板高度上限＝#camera-frame 底邊減 .control-row 底邊，面板不會超出攝影機外框，不管視窗比例或全螢幕都準；
-// 空間小到誇張時退回下限，不讓面板消失。
+// 選歌面板高度上限＝視窗底邊減面板頂端（#top-center-stack 底邊＋面板的上間距 0.5em，見 styles.css 的 .tl-popup），不管視窗比例或全螢幕都準。
+// 2026-11-19 起以視窗底邊為準：16:9 框的邊已經淡化看不見，比 16:9 高的螢幕（16:10 等）可以多用框上下的空白。空間小到誇張時退回下限，不讓面板消失。
 const POPUP_BOTTOM_MARGIN_PX = 8;
 const POPUP_MAX_HEIGHT_FLOOR_PX = 120;
-const cameraFrame = document.getElementById('camera-frame');
-const controlRow = document.getElementById('control-row');
+const POPUP_TOP_GAP_EM = 0.5;
+const topStack = document.getElementById('top-center-stack');
 function applyPopupMaxHeight() {
-  const available = cameraFrame.getBoundingClientRect().bottom - controlRow.getBoundingClientRect().bottom - POPUP_BOTTOM_MARGIN_PX;
+  const gapPx = POPUP_TOP_GAP_EM * parseFloat(getComputedStyle(topStack).fontSize);
+  const available = window.innerHeight - topStack.getBoundingClientRect().bottom - gapPx - POPUP_BOTTOM_MARGIN_PX;
   document.documentElement.style.setProperty('--popup-max-height', `${Math.max(POPUP_MAX_HEIGHT_FLOOR_PX, available)}px`);
 }
 
@@ -122,6 +123,9 @@ function mountUiScale() {
     applyUiFontSize();
     applyPopupMaxHeight();
   }));
+  // 疊層高度不只跟著視窗變：歌名換行、控制列換列也會改變它，而且發生在播放器區塊重繪的當下（比 renderPopupPanels 晚），所以看疊層本身的尺寸變化。
+  // 面板是 position:absolute，不算進疊層的尺寸，改面板高度不會再觸發這裡（2026-11-19 code review 後改，原本只在打開面板時量一次）。
+  new ResizeObserver(rafThrottle(applyPopupMaxHeight)).observe(topStack);
 }
 
 // 系統控制列（鏡頭開關／現場人數／重置骨架 ID）。現場人數沒有預設值，選之前 vision.js 不推論。選人數通常要等 1~2 秒模型重建，期間 vision.js 用舊實例照常推論，

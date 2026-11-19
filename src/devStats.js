@@ -26,6 +26,11 @@ window.__stats = () => {
 
 window.__pressLog = midiPlayer.pressLog;
 
+// __tryMode()：看 1-B 的 dev 開關（scheduler.js 的 cfg.modes，預設全關＝原本的行為）。__tryMode('keyboard', { oneSlice: true }) 改 PC 鍵盤手那組、'gesture' 改揮手那組，回傳改完的開關。
+//   oneSlice：一下推進一個垂直切片（不做近距起音分組）；holdToNext：讀法 B，他的音一律響到他的下一個起音（鍵盤開了就不再用放開鍵收音）。
+// 播放中（含暫停）改的話從目前位置接續生效；其他狀態下一次 ▶ 重新載入時生效。重新整理頁面就回到預設。
+window.__tryMode = (source, patch) => (source === undefined ? midiPlayer.devModes() : midiPlayer.setDevModes(source, patch ?? {}));
+
 // copy(__visionLog())：這一段演奏（從頭播起，暫停與曲終不記）的逐幀紀錄（兩手手腕、脖子以下節點的原始／world／平滑座標與 presence、偵測、鎖定的手、推論耗時）與追蹤層的鎖定／釋放事件，
 // 查手點互相干擾與多出來的 ID 用；__visionLog(15) 只取最後 15 秒。先按 ❚❚ 再切 DevTools 打指令，打字的那段就不會記進去。
 window.__visionLog = visionLog;

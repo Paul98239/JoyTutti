@@ -10,14 +10,16 @@
 @layer base {
 
 :root {
-  /* 暖色系：底是深的暖棕、強調色是蜂蜜琥珀、文字是奶油白。WCAG 對比：--text 在 --panel-bg 上 15.5:1、--on-accent 在 --accent 上 10.6:1（2026-11-18 用公式算，計算見任務 3 報告） */
+  /* 暖色系：底是深的暖棕、強調色是蜂蜜琥珀、文字是奶油白。規則（2026-11-19，WCAG 2.x）：文字對底 ≥ 7:1、按鈕與欄位的邊框 ≥ 3:1、狀態不只靠顏色。
+     現值：--text 在 --panel-bg 上 15.5:1、--on-accent 在 --accent 上 9.0:1、--accent 當文字在 --field-bg 上 9.4:1、--border-light 在 --btn-bg 上 4.1:1
+     （用 WCAG 2.x 相對亮度公式算，2026-11-19）。琥珀從 #ffc46b 調暗到 #f5b153：跟奶油白文字的亮度差從 L* 15 拉到 21，年長者（水晶體變黃、黃白難分）比較分得出琥珀字與一般字。 */
   --bg: #1a120e;
   --field-bg: #22170f;       /* 輸入框、下拉、清單列：比面板再深一階的暖棕（不是純黑） */
   --panel-bg: #2a1d16;       /* 暖深棕，浮在舞台上對比夠 */
   --panel-glass: rgba(42, 29, 22, 0.9);   /* 頂端兩條浮動工具列漸層的下端 */
   --border: #6e5646;         /* 亮到區塊邊界看得清 */
   --border-light: #a48a75;
-  --accent: #ffc46b;         /* 蜂蜜琥珀：「播放中」「開著」「已經播到這裡」 */
+  --accent: #f5b153;         /* 蜂蜜琥珀：「播放中」「開著」「已經播到這裡」 */
   --accent-2: #ff9a76;       /* 珊瑚橘：進度條漸層的尾端 */
   --text: #fff8f0;
   --text-dim: #fbeee0;       /* 次要文字也要亮 */
@@ -41,14 +43,15 @@
 
   /* 浮動 UI 的基準字級；實際值由 src/ui.js 的 applyUiFontSize() 執行期覆寫＝f(視窗實際像素寬) ÷ 瀏覽器縮放倍率，所以 Ctrl +/− 縮放時 UI 視覺大小不變；16px 只是 JS 尚未執行前的靜態退路 */
   --ui-fs: 16px;
-  /* 選歌彈出面板的高度上限；實際值由 src/ui.js 的 applyPopupMaxHeight() 量測 #camera-frame 動態覆寫，70vh 只是靜態退路 */
+  /* 選歌彈出面板的高度上限；實際值由 src/ui.js 的 applyPopupMaxHeight() 量測視窗底邊與 #top-center-stack 動態覆寫，70vh 只是靜態退路 */
   --popup-max-height: 70vh;
 
-  /* 圓角三個層級：圓形（播放鈕／把手／spinner）、大容器（彈出面板／舞台提示）、小控制項（工作列按鈕／下拉／輸入框／浮動小方塊／清單列）；另有頂端工具列外殼用的膠囊形。
-     原生 <select> 展開後的選項清單是方形，膠囊形收合框跟它反差太大，所以小控制項統一小圓角 */
+  /* 圓角三個層級：圓形（播放鈕／把手／spinner）、大容器（舞台提示）、小控制項（工作列按鈕／下拉／輸入框／浮動小方塊／清單列）；另有頂端工具列外殼用的膠囊形。
+     原生 <select> 展開後的選項清單是方形，膠囊形收合框跟它反差太大，所以小控制項統一小圓角；2026-11-19 從 0.6em 收到 0.3em（方一點、但仍有圓角，跟展開的方形清單更接近）。
+     選歌面板的外框照同心圓角：外框圓角＝內部控制項圓角＋面板內距（見 .tl-popup）。 */
   --radius-circle: 50%;
   --radius-lg: 1em;
-  --radius-sm: 0.6em;
+  --radius-sm: 0.3em;
   --radius-pill: 999px;      /* 頂端兩條工具列與進度條的外殼：圓潤的膠囊形 */
 }
 
@@ -57,18 +60,27 @@
 body, html {
   width: 100%; height: 100%;
   overflow: hidden;
-  background: #120b08;       /* 非 16:9 螢幕時 #camera-frame 兩側露出的顏色：比舞台再暗一階的暖棕 */
+  background: #110a07;       /* 漸層的最外圈色，漸層還沒畫出來之前的底 */
   /* 繁體中文優先用作業系統內建的字體，不另外下載字型 */
   font-family: system-ui, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+}
+/* 舞台背景（2026-11-19 從 #stage-blackout 移到 body）：攝影機畫面已經不畫了，背景不必再是蓋住畫面的不透明遮罩，直接鋪滿整個視窗（不限 16:9），
+   16:9 的框（#camera-frame）透明、沒有邊框，只負責把骨架裁在裡面，框的邊界就看不見了。
+   三層放射漸層由上到下疊：地板一圈琥珀色的光、上方一盞柔和的聚光、整體中間亮四角暗。 */
+body {
+  background:
+    radial-gradient(60% 34% at 50% 100%, rgba(255, 168, 92, .16), transparent 72%),
+    radial-gradient(70% 60% at 50% 8%, rgba(255, 206, 150, .10), transparent 70%),
+    radial-gradient(130% 100% at 50% 40%, #2c1d15 0%, #1d130e 55%, #110a07 100%);
 }
 
 }
 
 @layer ui {
 
-/* #webcam：純取樣來源，畫面上永久不顯示。
-   vision.js 的 texImage2D／drawImage 讀的是解碼幀，跟這裡的 CSS 無關；元素必須留在 DOM 裡（執行期不能搬動）才能繼續跑 requestVideoFrameCallback。
-   畫面刻意永久黑幕（見 #stage-blackout），所以連模糊背景也不顯示。用 visibility 而不是 display:none：display:none 的 <video> 在部分瀏覽器會停止解碼，rVFC 就收不到新幀。 */
+/* #webcam：純取樣來源，畫面上永久不顯示（攝影機畫面只拿來推論，不畫出來）。
+   vision.js 的 createImageBitmap 讀的是解碼幀，跟這裡的 CSS 無關；元素必須留在 DOM 裡（執行期不能搬動）才能繼續跑 requestVideoFrameCallback。
+   用 visibility 而不是 display:none：display:none 的 <video> 在部分瀏覽器會停止解碼，rVFC 就收不到新幀。 */
 #webcam {
   display: block;
   position: fixed; inset: 0;
@@ -91,19 +103,18 @@ body, html {
 }
 
 /* 「視窗裝得下的最大 16:9 方框」：寬度取「視窗寬」與「視窗高 × 16/9」的較小者，aspect-ratio 由寬度推出高度；鎖 16:9 讓 F11 進出全螢幕時只是等比例縮放，框內 object-fit:cover 每次裁切都一致。
-   不用 max-width/max-height + aspect-ratio：在 flex 版面裡兩軸都沒有定值會整個塌成 0 高。只留 1px 很淡的暖色細線與小圓角界定畫面與兩側。 */
+   不用 max-width/max-height + aspect-ratio：在 flex 版面裡兩軸都沒有定值會整個塌成 0 高。
+   透明、沒有邊框（2026-11-19）：舞台背景在 body、鋪滿整個視窗，這個框只負責把骨架（跟推論的畫面同比例）裁在 16:9 裡，邊界看不見。 */
 #camera-frame {
   position: relative;      /* #stage-hint 以此為定位基準；頂端 pill／控制列在框外的 #top-center-stack */
   width: min(100vw, 100vh * 16 / 9);
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  border: 1px solid rgba(255, 214, 170, .14);
-  border-radius: 0.6em;
-  background: var(--bg);
+  background: transparent;
 }
 
-/* 頂端置中疊層：播放 pill 在上、系統控制／選歌控制列在下。
-   兩者垂直疊在同一個 flex 直欄、水平都置中，結構上不會互相搶寬度或遮蔽。維持 position:fixed（不放進 #camera-frame）：方框有 overflow:hidden，底下的彈出面板會被裁掉。
+/* 頂端置中疊層：播放 pill（左端是「選歌」）在上、系統控制列在下，選歌面板釘在整個疊層正下方（.tl-popup 以這裡為定位基準：position:fixed 也是 absolute 子元素的參照）。
+   兩者垂直疊在同一個 flex 直欄、水平都置中，結構上不會互相搶寬度或遮蔽；面板在兩列之下，不會蓋到任何一列。維持 position:fixed（不放進 #camera-frame）：方框有 overflow:hidden，底下的彈出面板會被裁掉。
    z-index 50 < #loading-overlay 的 100（開機時被載入畫面蓋住）。開機期間擋互動的不是 z-index，是 #app-shell 的 inert 屬性（index.html 開頁就帶著、src/ui.js 收起載入畫面時解除）。 */
 #top-center-stack {
   position: fixed;
@@ -117,10 +128,10 @@ body, html {
   gap: 0.5em;
 }
 
-/* 系統控制／選歌橫排一列，外殼跟播放 pill 同一組樣式變數，視覺上是同一家族的頂端工具列。橫排而非直排：直排時選歌的彈出面板往下展開會蓋住下面其他觸發鈕（.tl-popup z-index:60 高於同層的 .tl-trigger）。
+/* 系統控制列（鏡頭／人數／重置）橫排一列，外殼跟播放 pill 同一組樣式變數，視覺上是同一家族的頂端工具列。
    max-width 是 flex-wrap 真的能換行的必要條件：position:fixed 元素預設內容多寬就多寬，沒有上限的話窄視窗下按鈕會直接超出畫面右緣而不是換行。
-   position:relative：這個容器是 .tl-popup 定位的參照對象（見 .tl-popup），不是外層的 #top-center-stack。
-   整條高度是被內部按鈕（.tl-text-btn／.tl-trigger／.tl-select）的 padding 撐出來的，外殼 padding 只是最後一步。外殼是膠囊形（--radius-pill）、內部元件是 --radius-sm：跟播放 pill 同一套外殼語彙。
+   position:relative：給 .tl-note（狀態提示）定位用。
+   整條高度是被內部按鈕（.tl-text-btn／.tl-select）的 padding 撐出來的，外殼 padding 只是最後一步。外殼是膠囊形（--radius-pill）、內部元件是 --radius-sm：跟播放 pill 同一套外殼語彙。
    背景是上亮下暗的半透明暖棕漸層＋很淡的暖色細邊。 */
 .control-row {
   position: relative;
@@ -200,20 +211,22 @@ body, html {
 }
 .tl-note.is-error { color: var(--danger); border-color: var(--danger-border); }
 
-/* 選歌的觸發鈕，跟系統控制 bar 同一套外觀語彙。細長樣式：字級不變（保護可讀性）。 */
+/* 選歌的觸發鈕（2026-11-19 從控制列移到播放 pill 的左端，歌名旁邊），跟系統控制 bar 同一套外觀語彙。細長樣式：字級不變（保護可讀性）。 */
 .tl-trigger {
+  flex-shrink: 0;
   font-size: var(--ui-fs);
   padding: 0.3em 0.65em; border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);
 }
 
-/* 彈出小面板：釘在整排控制列（.control-row）正下方置中展開，不是螢幕置中，也不是相對自己的觸發鈕——觸發鈕橫排一列，各自釘在自己下面的話靠右的鈕會讓面板展到很右邊。
-   統一釘在整排下方（.control-row 是 position:relative，是這裡 position:absolute 的參照對象），不管點哪個觸發鈕面板都出現在同一位置（開合狀態是 uiStore.openPanel 單一值，天生互斥，見 src/ui.js）。
-   left:50%+translateX(-50%) 而非 left:0：.control-row 水平置中在頂端疊層裡，面板置中展開，width 的 92vw 上限才確實保證不超出視窗左右；貼齊左緣的話置中的觸發鈕會把面板推向右側而被裁到視窗外。
+/* 彈出小面板：釘在整個頂端疊層（#top-center-stack，播放 pill＋控制列）正下方置中展開，不是螢幕置中，也不是相對自己的觸發鈕。2026-11-19 從「控制列正下方」改到這裡：
+   「選歌」移到第一列之後，面板放在兩列之下，就不會蓋到任何一列（開合狀態是 uiStore.openPanel 單一值，見 src/ui.js）。
+   left:50%+translateX(-50%) 而非 left:0：疊層水平置中，面板置中展開，width 的 92vw 上限才確實保證不超出視窗左右。
    - 字級跟工作列同一套：font-size 是 var(--ui-fs)，內部尺寸全是 em，整組一起縮放。
    - 長高只延伸底部、被 max-height 夾住，內容超過時只有 .score-part-list（分譜清單）內部捲動，觸發鈕與右上角 ✕ 的位置永遠不變。.tl-scroll 本身刻意不設 overflow-y:auto：
      否則內容夠多時兩條捲軸疊在一起，外層那條還會跟 ✕ 同一個角落打架。
-   - max-height 吃 --popup-max-height（src/ui.js 的 applyPopupMaxHeight() 量 #camera-frame 實際底邊算出，不是猜 vh）：面板不會超出攝影機外框；720px 只是超大螢幕的絕對上限。 */
+   - max-height 吃 --popup-max-height（src/ui.js 的 applyPopupMaxHeight() 量視窗底邊與疊層底邊算出，不是猜 vh）：面板不會超出視窗；720px 只是超大螢幕的絕對上限。
+   - 外框圓角＝內部控制項圓角（--radius-sm）＋面板內距（1em）：同心圓角，內外的弧線平行。 */
 .tl-popup {
   position: absolute;
   top: calc(100% + 0.5em); left: 50%;
@@ -228,7 +241,7 @@ body, html {
   padding: 1em;
   background: var(--panel-bg);
   border: var(--line) solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: calc(var(--radius-sm) + 1em);
   box-shadow: var(--shadow-lg);
 }
 
@@ -280,7 +293,7 @@ body, html {
   display: flex;
   align-items: center;
   gap: 0.6em;
-  position: relative; z-index: 1;   /* 按鈕的滑鼠提示會往下蓋到控制列上，要疊在它之上（面板 z-index 60 仍更高） */
+  position: relative; z-index: 1;   /* 按鈕的滑鼠提示會往下蓋到控制列上，要疊在它之上 */
   width: max-content;
   max-width: min(100vw, 100vh * 16 / 9);
   padding: 0.35em 1.1em 0.35em 0.45em;
@@ -312,30 +325,24 @@ body, html {
 .top-progress-bar::-webkit-progress-value { background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: var(--radius-pill); box-shadow: 0 0 10px rgba(255, 170, 100, .55); }
 .top-progress-bar::-moz-progress-bar { background: linear-gradient(90deg, var(--accent), var(--accent-2)); border-radius: var(--radius-pill); }
 
-/* 播放 pill 與控制列各自獨立淡化，純 CSS :hover／:has()／:focus-within，沒有 JS 計時器、沒有延遲：碰到（或鍵盤焦點進去）就顯示，沒碰到立刻淡化，兩者互不牽動。
-   還沒有能播放的歌曲之前（播放 pill 帶 is-empty：idle／載入中），控制列常駐不淡出——這時它是唯一的操作入口，要先看得到「選歌」按鈕在哪；選好歌之後控制列回到 hover 才顯示，換播放 pill 常駐不淡出，
-   把畫面重心讓給攝影機與正在播放的資訊。兩條規則共用同一個「有沒有歌可播」判斷，條件互斥。觸控裝置沒有 hover，states 層的 @media (hover: none) 讓兩者固定顯示。 */
+/* 淡化：純 CSS :hover／:has()／:focus-within，沒有 JS 計時器、沒有延遲：碰到（或鍵盤焦點進去）就顯示，沒碰到立刻淡化。
+   播放 pill 常駐不淡出（2026-11-19 起「選歌」在 pill 上，它是隨時都要找得到的入口；播放中也要看得到歌名）。
+   控制列（鏡頭／人數／重置）平常淡化、碰到才顯示；還沒有能播放的歌曲之前（播放 pill 帶 is-empty：idle／載入中）常駐不淡出——這時要先選現場人數。
+   選歌面板開著時控制列不特別處理：面板在控制列之下，不會互相遮蔽。觸控裝置沒有 hover，states 層的 @media (hover: none) 讓控制列固定顯示。 */
 .control-row {
   opacity: var(--idle-opacity);
   transition: opacity var(--dur-base) ease;
 }
 .control-row:hover,
-.control-row:focus-within,
-.control-row:has(.tl-popup:not([hidden])) {
+.control-row:focus-within {
   opacity: 1;
 }
 #top-center-stack:has(#toolbar-playback.is-empty) .control-row {
   opacity: 1;
 }
 #toolbar-playback {
-  opacity: var(--idle-opacity);
-  /* width 也跟著淡化一起過渡：pill 是 width:max-content，歌名長度一變（換歌）寬度就跳一格，
-     置中的疊層又會跟著整條橫移，沒有這個過渡看起來像瞬間重排。 */
-  transition: opacity var(--dur-base) ease, width var(--dur-base) ease;
-}
-#toolbar-playback:hover { opacity: 1; }
-#toolbar-playback:not(.is-empty) {
-  opacity: 1;
+  /* width 跟著過渡：pill 是 width:max-content，歌名長度一變（換歌）寬度就跳一格，置中的疊層又會跟著整條橫移，沒有這個過渡看起來像瞬間重排。 */
+  transition: width var(--dur-base) ease;
 }
 
 #stage {
@@ -345,7 +352,7 @@ body, html {
   display: grid;
   place-items: center;
   overflow: hidden;
-  background: var(--bg);
+  background: transparent;   /* 舞台背景在 body（見 body） */
 }
 
 /* 舞台中央的提示（攝影機關閉／還沒選現場人數）。
@@ -368,41 +375,21 @@ body, html {
   pointer-events: none;
 }
 
-/* 雙層畫布：WebGL 視訊背景 + 2D 骨架覆蓋層。
-   #canvas-container 單純滿版 #stage，子 canvas 的 object-fit:cover 自動處理裁切（滿版無縫隙
-   優先於零裁切，不做 letterbox）。 */
+/* 骨架畫布（2D）。2026-11-19 拿掉 WebGL 攝影機畫面與蓋住它的黑幕：攝影機畫面本來就完全被蓋住，看到的只有骨架與舞台背景。
+   #canvas-container 單純滿版 #stage，canvas 的 object-fit:cover 自動處理裁切（滿版無縫隙優先於零裁切，不做 letterbox）；在 #stage-hint（z-index 2）之下。 */
 #canvas-container {
   position: relative;
   width: 100%;
   height: 100%;
   overflow: hidden;
 }
-#gl-canvas,
 #overlay-canvas {
   position: absolute;
   top: 0; left: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-#overlay-canvas { z-index: 1; }
-
-/* 永久黑幕：攝影機畫面刻意永遠不顯示（鏡頭與追蹤仍在背景運作，見 vision.js）。
-   沒有任何切換方式。z-index 蓋過 #gl-canvas（沒設 z-index，隱含 0）但蓋不過 #overlay-canvas
-   （z-index:1）——只蓋攝影機畫面，骨架要畫在黑幕之上；同時仍在 #stage-hint（z-index 2）之下，
-   讓「請選擇現場人數」之類的提示文字還是看得到。
-   顏色不是純黑，是暖色的舞台（三層不透明度不同的放射漸層，由上到下疊）：地板一圈琥珀色的光、上方一盞柔和的聚光、整體中間亮四角暗；
-   最底那層是不透明色，所以仍完全蓋住攝影機畫面。 */
-#stage-blackout {
-  position: absolute;
-  top: 0; left: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  background:
-    radial-gradient(60% 34% at 50% 100%, rgba(255, 168, 92, .16), transparent 72%),
-    radial-gradient(70% 60% at 50% 8%, rgba(255, 206, 150, .10), transparent 70%),
-    radial-gradient(130% 100% at 50% 40%, #2c1d15 0%, #1d130e 55%, #110a07 100%);
+  z-index: 1;
 }
 
 /* 載入遮罩：z-index 100 只管視覺上蓋住整個 app；開機期間點不到、Tab 不到底下的控制項是 #app-shell 的
@@ -525,11 +512,14 @@ body, html {
 .tb-play.is-loading .tb-ico-loading { display: inline; }
 
 /* 滑鼠移上去顯示按鈕名稱：純 CSS，文字直接讀按鈕的 aria-label（♪、鏡頭開關的 aria-label 由 JS 依狀態在「開啟○○／關閉○○」之間切換，提示自動跟著變）。播放列四顆鈕與系統控制的鏡頭／重置鈕共用這一條；
-   不用瀏覽器原生 title（樣式與出現延遲都不同）。只在有 hover 的裝置、按鈕可按時顯示（disabled 的 opacity 0.4 會連提示一起變淡）；pointer-events:none 讓提示不搶走按鈕的 hover。 */
+   不用瀏覽器原生 title（樣式與出現延遲都不同）。只在有 hover 的裝置、按鈕可按時顯示（disabled 的 opacity 0.4 會連提示一起變淡）；pointer-events:none 讓提示不搶走按鈕的 hover。
+   z-index 61：高過選歌面板（60），面板開著時提示不會被蓋住（同 .tl-note）。只對控制列的按鈕有效：播放 pill（#toolbar-playback）是 position:relative＋z-index:1，
+   自成一個疊放層，裡面的提示在 #top-center-stack 裡只算 1；pill 的提示往下只會蓋到控制列，到不了下面的面板，所以不影響。 */
 @media (hover: hover) {
   .tb-btn::after, .tl-text-btn::after {
     content: attr(aria-label);
     position: absolute; top: calc(100% + 0.65em); left: 50%;
+    z-index: 61;
     transform: translateX(-50%);
     padding: 0.25em 0.6em; border-radius: var(--radius-sm);
     background: var(--panel-bg); border: var(--line) solid var(--border-light);
@@ -574,6 +564,7 @@ body, html {
   max-height: 15em; overflow-y: auto;
   min-height: 0;
   padding-right: 0.15em;
+  color-scheme: dark;   /* 捲軸用深色版本：瀏覽器預設的白色捲軸在深色面板上很刺眼 */
 }
 .score-part-row {
   display: flex; align-items: center; gap: 0.6em;
@@ -582,7 +573,8 @@ body, html {
   flex-shrink: 0;
   transition: border-color var(--dur-fast), background var(--dur-fast);
 }
-.score-part-row.is-mine { border-color: var(--accent); background: #2a2410; }
+/* 已指派那一列：底色跟欄位底同色相（59°，只亮一階；舊值 #2a2410 色相 92° 偏橄欖）、琥珀邊框，再加左側一條粗琥珀色條——狀態不只靠顏色區分（WCAG 1.4.1），色條是形狀上的差別。 */
+.score-part-row.is-mine { border-color: var(--accent); background: #341f10; box-shadow: inset 0.3em 0 0 var(--accent); }
 /* 譜表名稱附有音域與音數（「大鋼琴・譜表 1（A3–E6，339 音）」），比面板給的寬度長：單行顯示，超出時由 .mq 跑馬燈 loop
    （截斷會把音域吃掉，名稱就失去用途）。min-width:0 讓 flex 子項可以縮小到比文字窄。 */
 .score-part-name {
@@ -670,6 +662,9 @@ body, html {
   .btn:focus-visible, .tl-select:focus-visible, .player-input:focus-visible {
     outline: 2px solid var(--accent); outline-offset: 2px;
   }
+  /* 選歌面板裡的欄位：往外畫的焦點框會被 .tl-scroll 的 overflow:hidden 切掉左側（2026-11-19 使用者回報的黃框）。
+     改成往內畫，畫在邊框內側，不會超出欄位、不會被裁（另一案「不畫焦點框、只留邊框變色」比較後不採用，2026-11-19 使用者決定）。 */
+  .tl-popup .player-input:focus-visible { outline-offset: calc(-2px - var(--line)); }
 
   /* 觸控裝置沒有 hover：頂端浮動 UI 固定顯示，否則淡出後的工作列永遠喚不出來。 */
   @media (hover: none) {

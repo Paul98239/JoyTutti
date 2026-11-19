@@ -41,10 +41,11 @@
   <video id="webcam" playsinline></video>
 
   <!-- 版面骨架（HTML-first：所有靜態 UI 都寫在這裡，JS 只綁行為與填動態清單）：
-       #app-shell 佔滿視窗，flex 置中一個鎖 16:9 的 #camera-frame（F11 進出全螢幕時只是等比例縮放，裁切一致就穩定；見 src/styles.css），攝影機畫面永久蓋著黑幕（#stage-blackout）。
-       頂端置中疊一欄 #top-center-stack（position:fixed，不受 #camera-frame 的 overflow:hidden 裁切）：播放 pill（#toolbar-playback）在上，系統控制／選歌控制列（#control-row）在下，垂直分層、水平都置中，結構上不會互相遮蔽。
-       panel-system 是常駐系統控制 bar，panel-song 是觸發鈕＋彈出面板（釘在整排控制列正下方置中，見 src/styles.css 的 .tl-popup）。
-       攝影機容器不能用 JS 在執行期搬動（vision.js 在模組頂層就抓 #webcam／#gl-canvas／#overlay-canvas／#stage-hint）；#stage-hint 是舞台中央的提示，absolute 定位、不佔 #stage 的 grid 格。
+       #app-shell 佔滿視窗，flex 置中一個鎖 16:9 的 #camera-frame（F11 進出全螢幕時只是等比例縮放，裁切一致就穩定；見 src/styles.css）。攝影機畫面不顯示（只當推論來源），
+       舞台背景是 body 的暖色漸層、延伸到全螢幕；#camera-frame 透明、沒有邊框，只負責把骨架裁在 16:9 裡。
+       頂端置中疊一欄 #top-center-stack（position:fixed，不受 #camera-frame 的 overflow:hidden 裁切）：播放 pill（#toolbar-playback，左端是「選歌」）在上，系統控制列（#control-row）在下，
+       選歌面板（#panel-song）釘在整個疊層正下方置中（見 src/styles.css 的 .tl-popup），垂直分層、水平都置中，結構上不會互相遮蔽。
+       攝影機容器不能用 JS 在執行期搬動（vision.js 在模組頂層就抓 #webcam／#overlay-canvas／#stage-hint）；#stage-hint 是舞台中央的提示，absolute 定位、不佔 #stage 的 grid 格。
        唯一會重複的結構「分譜列」放在 <template id="tpl-part-row">，由 JS clone 後填聲部名。
        #app-shell 的 inert：開機期間整個 app 惰性（點不到、Tab 不到），src/ui.js 收起載入畫面時解除。
        控制項的行為經 data-action（click）／data-field（change／input）委派到 #top-center-stack（src/ui.js）。
@@ -58,6 +59,8 @@
            ♪ 是進出試聽（官方 Sequencer）的開關，試聽中黃底；試聽中 ▶ ❚❚ ↻ 作用在試聽。is-empty＝還沒有能播放的歌（idle／載入中），控制列的淡化條件靠它。
            按鈕 icon 是 inline SVG、不是字型字元：圖畫在 24×24 座標裡、重心對齊 (12,12)，viewBox 把它放在按鈕正中央，置中由向量座標保證，不受字型與像素取整影響（見 styles.css 的 .tb-icon）。 -->
       <div id="toolbar-playback" class="toolbar-playback is-empty">
+        <!-- 選歌放在 pill 的左端、歌名旁邊（跟歌曲有關的放一起）；面板是 #top-center-stack 的直接子元素，見下方 #panel-song -->
+        <button id="song-toggle" class="btn tl-trigger" type="button" data-action="toggle-panel" data-panel="song">選歌</button>
         <div id="transport-group" class="tb-transport" role="group" aria-label="播放控制">
           <button id="btnPlay" class="btn tb-btn tb-play" type="button" data-action="play" disabled aria-label="播放">
             <svg class="tb-icon" viewBox="-12 -12 48 48" aria-hidden="true"><path class="tb-ico-play" d="M7.333 4L7.333 20L21.333 12Z"/><g class="tb-ico-loading"><circle cx="4.5" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="19.5" cy="12" r="2.2"/></g></svg>
@@ -89,39 +92,36 @@
           <button id="btn-reset-pose" class="btn tl-text-btn" type="button" data-action="reset-pose" aria-label="重置骨架 ID">重置</button>
           <div id="system-note" class="tl-note" hidden></div>
         </div>
-        <div class="tl-widget">
-          <button id="song-toggle" class="btn tl-trigger" type="button" data-action="toggle-panel" data-panel="song">選歌</button>
-          <!-- 選歌面板：選曲＋分譜。#scorePartSection 預設隱藏，選到的 MIDI 有任何聲部時才浮現（單聲部也能指派給 PC 鍵盤手）。
-               .tl-scroll 是面板內真正捲動的那一層；✕ 是外殼的 absolute 子元素，不會跟著內容捲走。 -->
-          <div id="panel-song" class="tl-popup" hidden>
-            <button class="btn tl-close" type="button" data-action="close-panel" aria-label="關閉">✕</button>
-            <div class="tl-scroll">
-              <div class="player-input-group">
-                <div class="file-picker">
-                  <label for="localMidiInput" class="btn file-picker-btn">選擇檔案</label>
-                  <input type="file" id="localMidiInput" accept=".mid,.midi" class="file-picker-input" data-field="local-file">
-                  <!-- 超出欄位寬度的名稱用 .mq 跑馬燈頭尾相連 loop（見 styles.css 的「跑馬燈」）；文字由 ui.js 的 setMarqueeText() 寫入 -->
-                  <span id="localMidiFileName" class="mq file-picker-name"><span class="mq-main">未選擇檔案</span><span class="mq-loop" aria-hidden="true"><span class="mq-track" data-text="未選擇檔案"></span></span></span>
-                </div>
-                <div class="player-row">
-                  <select id="midiCategory" class="player-input" data-field="category"></select>
-                  <input type="search" id="midiSongQuery" class="player-input" data-field="song-query" placeholder="搜尋歌曲" autocomplete="off">
-                </div>
-                <!-- 原生 <select>：展開後的選項清單寬度由瀏覽器自己決定，刻意不做自訂下拉。關著時顯示的已選歌名，
-                     超出欄位寬度的部分原生下拉會直接截斷，所以在它上面疊一份鏡像文字（#midiSongMirror，.mq 跑馬燈，不吃點擊、
-                     對讀屏隱藏），文字由 midiPlayer.js 跟著選項同步。 -->
-                <div class="select-mq">
-                  <select id="midiSongSelect" class="player-input" data-field="song" disabled>
-                    <option value="">請選擇歌曲</option>
-                  </select>
-                  <span id="midiSongMirror" class="mq" aria-hidden="true"><span class="mq-main">請選擇歌曲</span><span class="mq-loop"><span class="mq-track" data-text="請選擇歌曲"></span></span></span>
-                </div>
-              </div>
-              <div id="scorePartSection" hidden>
-                <div id="scoreInfoText" class="score-info-text"></div>
-                <div id="scorePartList" class="score-part-list"></div>
-              </div>
+      </div>
+      <!-- 選歌面板：選曲＋分譜。#scorePartSection 預設隱藏，選到的 MIDI 有任何聲部時才浮現（單聲部也能指派給 PC 鍵盤手）。
+           .tl-scroll 是面板內真正捲動的那一層；✕ 是外殼的 absolute 子元素，不會跟著內容捲走。 -->
+      <div id="panel-song" class="tl-popup" hidden>
+        <button class="btn tl-close" type="button" data-action="close-panel" aria-label="關閉">✕</button>
+        <div class="tl-scroll">
+          <div class="player-input-group">
+            <div class="file-picker">
+              <label for="localMidiInput" class="btn file-picker-btn">選擇檔案</label>
+              <input type="file" id="localMidiInput" accept=".mid,.midi" class="file-picker-input" data-field="local-file">
+              <!-- 超出欄位寬度的名稱用 .mq 跑馬燈頭尾相連 loop（見 styles.css 的「跑馬燈」）；文字由 ui.js 的 setMarqueeText() 寫入 -->
+              <span id="localMidiFileName" class="mq file-picker-name"><span class="mq-main">未選擇檔案</span><span class="mq-loop" aria-hidden="true"><span class="mq-track" data-text="未選擇檔案"></span></span></span>
             </div>
+            <div class="player-row">
+              <select id="midiCategory" class="player-input" data-field="category"></select>
+              <input type="search" id="midiSongQuery" class="player-input" data-field="song-query" placeholder="搜尋歌曲" autocomplete="off">
+            </div>
+            <!-- 原生 <select>：展開後的選項清單寬度由瀏覽器自己決定，刻意不做自訂下拉。關著時顯示的已選歌名，
+                 超出欄位寬度的部分原生下拉會直接截斷，所以在它上面疊一份鏡像文字（#midiSongMirror，.mq 跑馬燈，不吃點擊、
+                 對讀屏隱藏），文字由 midiPlayer.js 跟著選項同步。 -->
+            <div class="select-mq">
+              <select id="midiSongSelect" class="player-input" data-field="song" disabled>
+                <option value="">請選擇歌曲</option>
+              </select>
+              <span id="midiSongMirror" class="mq" aria-hidden="true"><span class="mq-main">請選擇歌曲</span><span class="mq-loop"><span class="mq-track" data-text="請選擇歌曲"></span></span></span>
+            </div>
+          </div>
+          <div id="scorePartSection" hidden>
+            <div id="scoreInfoText" class="score-info-text"></div>
+            <div id="scorePartList" class="score-part-list"></div>
           </div>
         </div>
       </div>
@@ -129,11 +129,7 @@
     <div id="camera-frame">
       <div id="stage">
         <div id="canvas-container">
-          <canvas id="gl-canvas"></canvas>
           <canvas id="overlay-canvas"></canvas>
-          <!-- 永久黑幕：攝影機畫面刻意不顯示，鏡頭與追蹤照常在背景運作（見 vision.js），
-               這裡純粹是視覺遮蓋，沒有任何切換方式。 -->
-          <div id="stage-blackout"></div>
         </div>
         <div id="stage-hint" role="status" aria-live="polite" hidden></div>
       </div>

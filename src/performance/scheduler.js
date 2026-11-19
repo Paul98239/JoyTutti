@@ -22,6 +22,14 @@ export const DEFAULT_SCHEDULER_CONFIG = Object.freeze({
   // 預報的到達時刻跟目前預計的差不到這麼多（毫秒）就不換錨：預報器每個 tick 都會更新，免得每個 tick 都重排。應用層數字，不是規格
   forecastMinChangeMs: 10,
   stage2K: ENSEMBLE.STAGE2_K,   // 第二段防呆：錯過幾下才代打（ensemble.js 的 shouldSubstitute；可以傳別的值試）
+  // 1-B 的 dev 開關（2026-11-19 加；預設全關＝行為不變，使用者實機比較後才定預設）。依輸入來源分開：keyboard＝PC 鍵盤手，gesture＝揮手（沒帶來源的槽位觸發也算這邊）。
+  // load()／reassign() 時才讀（演奏中改 cfg 不影響這一輪；devStats.js 的 __tryMode() 改完會重新載入）。
+  //   oneSlice：一下推進一個垂直切片，不做近距起音分組（_groupEnd）
+  //   holdToNext：讀法 B，只看 noteOn：他的音一律響到他的下一個起音才收（沒有 hold 的音也拉長）；鍵盤開這個就不再用放開鍵收音（keyup 模式關掉）
+  modes: Object.freeze({
+    keyboard: Object.freeze({ oneSlice: false, holdToNext: false }),
+    gesture: Object.freeze({ oneSlice: false, holdToNext: false }),
+  }),
 });
 
 // 控制器事件 ev 在檔案裡是不是比這顆音的 note on 早：先比 tick，同一個 tick 再比軌序、軌內序（parser 的 byFileOrder，官方 timeline 的順序）；合併佇列用它決定同一個 tick 的控制器插在哪裡。
@@ -139,6 +147,7 @@ export class Scheduler {
     this._seq = 0;             // 佇列項目的建批次順序（合併各佇列送出時，同一刻照這個順序）
     this._resumeClockMs = 0;   // 最近一次 play() 的時鐘：動作時刻換成時鐘時不早於它（跨過暫停的不算）
     this._forecasters = [];    // 演奏者序號 → 預報器（setForecaster()；預設沒有）。是設定不是播放狀態：載入、改指派、重設都不拿掉
+    this._modes = this.cfg.modes;   // 這一輪生效的 1-B dev 開關（cfg.modes 在 load()／reassign() 時的快照）
     // 播放狀態（_resetPlayback() 要全部重設）
     this._playing = false;
     this._clockMs = 0;         // 排程器時鐘（只在 tick／trigger 前進，暫停不走）
@@ -227,6 +236,7 @@ export class Scheduler {
    */
   load(score, assignments) {
     this.stop();
+    this._modes = this.cfg.modes;
     this._score = score || null;
     this._plan = buildPlan(this._score, assignments, this._router);   // 沒有樂譜時是空的計畫：tick() 空轉
     this._router.resetIfSysexSent();   // 上一首送過整體參數的 SysEx（主音量、殘響…）：兩個合成器整個重設
@@ -272,6 +282,7 @@ export class Scheduler {
    */
   reassign(assignments) {
     if (!this._score) return;
+    this._modes = this.cfg.modes;
     const score = this._score;
     const rate = this.playbackRate;
     const pos = this.getPositionTicks();
@@ -281,7 +292,7 @@ export class Scheduler {
     for (const staff of this._plan.staves.values()) this._router.resetChannel(staff);
     this.silence();
     this._plan = buildPlan(score, assignments, this._router);
-    // 新的分配從頭建立（同 load()）：synth.js 補 port 時會整個重設合成器，shadow 已經對不上
+    // 新的分配從頭建立（同 load()）：staff 換了輸出 channel、synth.js 可能補了新的 port（新 channel 的狀態沒記在 shadow 裡），舊的 shadow 已經對不上
     this._router.clearShadow();
     this._sendInitialState(boundary);
     if (!this._playing) for (const staff of this._plan.staves.values()) this._router.releaseForPause(staff);
@@ -951,7 +962,12 @@ export class Scheduler {
     finally { this.events.flush(); }   // 對外事件在這次呼叫的合成器呼叫都送出之後才發
   }
 
+  // 這個輸入來源的 1-B dev 開關（cfg.modes）：'keyboard' 一組，其他（'gesture'、沒帶來源的槽位觸發）一組
+  _modeOf(source) { return this._modes[source === 'keyboard' ? 'keyboard' : 'gesture']; }
+
   _trigger(ev) {
+    // dev 開關 holdToNext（讀法 B）的鍵盤：拿掉 key，走跟揮手一樣的非 keyup 路徑（放開鍵不收音，lift() 找不到登記的鍵就不做事）
+    if (ev.key != null && this._modeOf(ev.source).holdToNext) ev = { ...ev, key: null };
     const p = this._bySlot.get(ev.slot);   // 這個槽位的演奏者；找不到＝沒有資格觸發
     if (!this._playing || !p || (p.status !== 'substitute' && p.groupEnd >= p.plan.driverSegs.length)) return false;
     this._ensureEnsembleAnchored();
@@ -1270,6 +1286,7 @@ export class Scheduler {
   // 有長度上限的來源（手勢，tempo.js 的 maxGroupSpanSec）再加一條：這個起音距組頭的真實時間不超過上限，不然停在這裡，下一次揮手就按得到。
   // 彈得慢間隔被拉開、併的就少，彈得快併的就多。回傳這一組的結束（不含）。
   _groupEnd(p, j, rate, source) {
+    if (this._modeOf(source).oneSlice) return j + 1;   // dev 開關：一下一個切片，不分組
     const segs = p.plan.driverSegs, minSec = minPressIntervalSec(source), spanSec = maxGroupSpanSec(source), headSec = this._secOf(segs[j].ticks);
     let m = j + 1;
     while (m < segs.length && (this._secOf(segs[m].ticks) - this._secOf(segs[m - 1].ticks)) / rate < minSec
@@ -1364,6 +1381,7 @@ export class Scheduler {
     this._ledger.sound(staff, note, offMs, dueMs, {
       holdScope: human ? staff.slot : 'ensemble', holdTicks: owner.plan.driverTicks, holdFrom: owner.cursor,
       rate: owner.tempo.playbackRate, fromTick, clockMs: this._clockMs, timed, mode: mode ?? null,
+      holdToNext: human && this._modeOf(owner.lastSource).holdToNext,   // dev 開關：讀法 B 只用在演奏者自己的音
     });
   }
 

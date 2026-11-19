@@ -95,8 +95,11 @@ export const CC = Object.freeze({
 //   part ＝ 一組 staff，可指派的單位。兩個 staff 在同一個 part，當且僅當串得起來：
 //     ① 同一個絕對 channel（不論在哪一軌）：MIDI 1.0 的 channel 訊息（Program Change、控制器）作用在整個 channel，接收端同一時間一個 channel 只有一個音色，
 //        分不出是哪一軌送的。MuseScore 的鋼琴兩行譜、lakh 檔把鼓組每個打擊樂器各放一軌（都在第 10 個 channel），都因此是一個 part。
-//     ② format 1／2 的同一軌、而且樂器類別相同（打擊，或同一個 GM family＝program >> 3）：軌是寫檔端自己分的單位（RP-001），
-//        MuseScore 的演奏法 channel（普通 40／撥奏 45／震音 44）在同一軌、同一個 family。同一軌裡類別不同的 channel（混打擊與旋律、中途換樂器寫成另一個 channel）拆開。
+//     ② format 1／2 的同一軌、而且同為打擊或同一個 program：軌是寫檔端自己分的單位（RP-001）。同一軌裡 program 不同的 channel（混打擊與旋律、不同樂器、中途換樂器寫成另一個 channel）拆開。
+//        2026-11-19 從「同一個 GM family（program >> 3）」收緊成「同一個 program」：lakh 全量裡靠 family 併起來、program 不同的 staff 對有 422 組，
+//        其中 305 組（72%）兩個 channel 有 ≥20% 的音同時在響（較像兩位樂手，例如弦樂合奏 48＋合唱 52、兩種吉他），錯併多於正確合併；manifest 83 筆沒有這種合併、
+//        切分結果不變（corpus/lakh 全量統計，2026-11-19）。「錯併」在 UI 補救不了、「太細」可以一人指派多個 part 補救，所以寧細勿併。
+//        代價：MuseScore 的演奏法 channel 若 program 不同（普通 40／撥奏 45／震音 44）會分成不同 part（corpus 裡沒有這種檔）。
 //        format 0 不套這條：RP-001 規定 format 0 只有一條「多 channel 的軌」，軌不帶任何分組資訊，每個 channel 各自成 part。
 //   中途換音色（program change 不在 tick 0）不拆：program 是 channel 在時間上的狀態（MIDI 1.0；GM2 §3.3.1：已在響的音維持原音色），staff 的 program 取第一顆音那個 tick 生效的值（buildPatchLookup()）。
 //   不推導左右手、譜號、旋律／伴奏、Voice 1–4、演奏法、踏板線、動態曲線、反覆記號，不依起訖時間或音數篩選或合併：MIDI 裡不存在或不精準，硬推只會多出誤判。
@@ -125,9 +128,38 @@ function mixerAtZero(tracks, portOffsets) {
 
 // 打擊或旋律（GM 規格的 channel 角色）：GM1 規定第 10 個 channel 是打擊；GM2 §2.4／§3.3.1 只有 Bank Select MSB 78H(120)＝節奏、79H(121)＝旋律會改變角色，
 // 其他 MSB（GS／GM1 檔常在第 10 個 channel 送 0）不改變角色。所以：MSB 120 → 打擊、MSB 121 → 旋律、其他或沒送 → 依絕對 channel 是不是第 10 個。
-// 官方 SpessaSynth 在預設（GS）模式下也是第 10 個 channel 固定打擊、bank select 不切換；XG 的 MSB 127 不在 MMA 規格內，不採用。
+// 官方 SpessaSynth 在預設（GS）模式下也是第 10 個 channel 固定打擊、bank select 不切換。廠商擴充（GS 的 SysEx、XG 的 MSB 127）在 percussionOverride() 另外處理。
 export const isPercussionBank = (msb, absChannel) =>
   msb === BANK_MSB_RHYTHM || (msb !== BANK_MSB_MELODY && absChannel % 16 === DRUM_CHANNEL);
+
+// 廠商擴充的打擊切換（2026-11-19 加，照官方 spessasynth_core 4.4.10 的處理，試聽用的就是它；查原始碼的 GS SysEx 處理與 BankSelectHacks）：
+//   · GS「USE FOR RHYTHM PART」：DT1 位址 40 1x 15，值 0＝旋律、1／2＝鼓組 map。x 是 GS 的 part 編號，換 channel 照 core 的 MIDIUtils.gsPartToChannel
+//     （x＝0 是第 10 個 channel、1～9 是第 1～9 個、10～15 不變），再加送出這個 SysEx 的軌的 port 偏移（同 core 的 channelOffset）。
+//   · XG：XG System On（43 1n 4C 00 00 7E）之後，bank MSB 127 是打擊（core 的 BankSelectHacks.isXGDrum；GS 模式下 127 不是）。
+// 取 staff 第一顆音那個 tick（含）之前最後一次的設定；都沒有回 undefined（照 isPercussionBank()）。
+const gsPartToChannel = (part) => (part === 0 ? DRUM_CHANNEL : part <= 9 ? part - 1 : part);
+function percussionSwitches(tracks, portOffsets) {
+  const gs = new Map();   // 絕對 channel → [{ ticks, drum }]（依 tick → 軌序 → 軌內序）
+  let xgOnTick = Infinity;
+  const events = [];
+  for (const track of tracks) track.events.forEach((ev, eventIndex) => { if (ev.kind === 'sysex' && ev.type === 'sysex') events.push({ ev, trackIndex: track.index, eventIndex }); });
+  events.sort((a, b) => a.ev.ticks - b.ev.ticks || a.trackIndex - b.trackIndex || a.eventIndex - b.eventIndex);
+  for (const { ev, trackIndex } of events) {
+    const d = ev.data;
+    if (classifySysex(d).category === 'xgOn') { xgOnTick = Math.min(xgOnTick, ev.ticks); continue; }
+    if (d.length >= 10 && d[0] === 0x41 && d[2] === 0x42 && d[3] === 0x12 && d[4] === 0x40 && (d[5] & 0xf0) === 0x10 && d[6] === 0x15) {
+      const ch = gsPartToChannel(d[5] & 0x0f) + (portOffsets.get(trackIndex) ?? 0);
+      if (!gs.has(ch)) gs.set(ch, []);
+      gs.get(ch).push({ ticks: ev.ticks, drum: d[7] > 0 });
+    }
+  }
+  return (absChannel, ticks, bankMsb) => {
+    const last = (gs.get(absChannel) ?? []).filter((x) => x.ticks <= ticks).at(-1);
+    if (last) return last.drum;
+    if (xgOnTick <= ticks && bankMsb === 127) return true;
+    return undefined;
+  };
+}
 
 // 把 staff 串成 part（切分規則 ① ②）：union-find。staves 依 (軌序, 絕對 channel) 排序；回傳 staff 陣列的陣列，依每組第一個 staff 排序（＝總譜由上而下）。
 function groupStaves(staves, format) {
@@ -138,7 +170,7 @@ function groupStaves(staves, format) {
   const link = (key, i) => { if (firstBy.has(key)) union(firstBy.get(key), i); else firstBy.set(key, i); };
   staves.forEach((s, i) => {
     link(`ch:${s.channel}`, i);
-    if (format !== 0) link(`tr:${s.trackIndex}:${s.percussionKit ? 'drum' : `family ${s.program >> 3}`}`, i);
+    if (format !== 0) link(`tr:${s.trackIndex}:${s.percussionKit ? 'drum' : `program ${s.program}`}`, i);
   });
   const groups = new Map();
   staves.forEach((s, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(s); });
@@ -301,13 +333,14 @@ function collectNotes(tracks, midiTicksToSeconds, warn, staffIndex) {
 }
 
 // 一個 staff 的初始狀態（staff 是一個 (track, 絕對 channel)，見 collectNotes() 的統計）：
-//   · program、bank：第一顆音那個 tick 生效的值（patch，見 buildPatchLookup()）；bank 都沒送過用 GM2 §3.3.1 的規格預設
-//     （第 10 個 channel 是節奏 bank 120，其餘是旋律 bank 121）。percussionKit 依 isPercussionBank()。
+//   · program、bank：第一顆音那個 tick 生效的值（patch，見 buildPatchLookup()）。percussionKit：有 GS／XG 的打擊切換（percussionSwitches()）就照它，沒有依 isPercussionBank()。
+//     bank 都沒送過用 GM2 §3.3.1 的規格預設，依 percussionKit 決定（打擊是節奏 bank 120，旋律是 121；沒有切換時就是「第 10 個 channel 120、其餘 121」）：
+//     這個值會在輸出 channel 上送出（voices.js 的初始 patch），被 GS／XG 切換角色的 channel 若照絕對 channel 給預設，會送出跟角色相反的 bank。
 //   · init：這個絕對 channel 在 tick 0 的混音 CC7／10／91／93（不分哪一軌送的，缺的補 GM 預設）；tick 0 都沒送是 null（下游用 GM 預設）。
-function buildStaff(vk, st, patch, mixer, warn) {
+function buildStaff(vk, st, patch, mixer, warn, switchedDrum) {
   const { program } = patch;
-  const bank = patch.bank ?? { msb: vk.channel % 16 === DRUM_CHANNEL ? BANK_MSB_RHYTHM : BANK_MSB_MELODY, lsb: 0 };
-  const percussionKit = isPercussionBank(patch.bank?.msb, vk.channel);
+  const percussionKit = switchedDrum ?? isPercussionBank(patch.bank?.msb, vk.channel);
+  const bank = patch.bank ?? { msb: percussionKit ? BANK_MSB_RHYTHM : BANK_MSB_MELODY, lsb: 0 };
   const init = mixer ? Object.fromEntries(Object.entries(GM_DEFAULT_MIXER).map(([k, d]) => [k, mixer[k] ?? d])) : null;
   if (percussionKit && !(program in GM_DRUM_KITS)) {
     // 這裡只確定「不是 GM2 附錄 B 定義的編號」，顯示名稱因此只能退回「標準鼓組」（見 gmProgramNameZh()）；實際播放會不會退回標準鼓組取決於載入的 SoundFont
@@ -370,12 +403,14 @@ export function collectPartsAndNotes(tracks, midiTicksToSeconds, warn, format) {
 
   const { notes, statsByStaff } = collectNotes(tracks, midiTicksToSeconds, warn, staffIndex);
   const patchAt = buildPatchLookup(tracks, portOffsets);
+  const drumAt = percussionSwitches(tracks, portOffsets);
   const mixer = mixerAtZero(tracks, portOffsets);
   const staves = [...staffIndex.values()]
     .sort((a, b) => a.trackIndex - b.trackIndex || a.channel - b.channel)
     .map((vk) => {
       const st = statsByStaff.get(vk.staffId);
-      return buildStaff(vk, st, patchAt(vk.trackIndex, vk.trackChannel, vk.channel, st.startTick), mixer.get(vk.channel), warn);
+      const patch = patchAt(vk.trackIndex, vk.trackChannel, vk.channel, st.startTick);
+      return buildStaff(vk, st, patch, mixer.get(vk.channel), warn, drumAt(vk.channel, st.startTick, patch.bank?.msb));
     });
 
   // part id ＝ p＋第一個 staff 的軌序號；同一軌開頭的 part 不只一個時，其餘依序加 .1、.2…（id 只是不透明的字串）。
@@ -388,10 +423,10 @@ export function collectPartsAndNotes(tracks, midiTicksToSeconds, warn, format) {
     parts.push(buildPart(n === 0 ? base : `${base}.${n}`, group));
   }
   if (format !== 0) {
-    // 同一軌裡有不同樂器類別的 channel、因此拆成多個 part（切分規則 ②）：提醒一次，方便追查（MuseScore 的「換樂器」也會這樣寫）。
+    // 同一軌裡有不同樂器（打擊／program）的 channel、因此拆成多個 part（切分規則 ②）：提醒一次，方便追查（MuseScore 的「換樂器」也會這樣寫）。
     for (const track of tracks) {
       const ids = [...new Set(staves.filter((s) => s.trackIndex === track.index).map((s) => s.partId))];
-      if (ids.length >= 2) warn(`track ${track.index} 的 channel 分屬 ${ids.length} 種不同樂器類別（打擊／GM family），分在 ${ids.join('、')} 這幾個 part`);
+      if (ids.length >= 2) warn(`track ${track.index} 的 channel 分屬 ${ids.length} 種不同樂器（打擊／program），分在 ${ids.join('、')} 這幾個 part`);
     }
   }
   const partOf = new Map(staves.map((s) => [s.id, s.partId]));

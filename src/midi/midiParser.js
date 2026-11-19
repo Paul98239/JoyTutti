@@ -116,8 +116,9 @@ export function buildSegments(notes) {
  * @property {number} channel  絕對 channel（含 port 偏移）
  * @property {number} program  GM program：第一顆音那個 tick 生效的值（自己軌優先、再查全曲同一個絕對 channel；都沒送過是 0）
  * @property {{msb:number, lsb:number}} bank  第一顆音那個 tick 生效的 Bank Select（查法同 program）；檔案從未送過就是 GM2 §3.3.1 的規格預設值
- *   （第 10 個 channel 為 120/0 節奏，其餘為 121/0 旋律）
- * @property {boolean} percussionKit  打擊（parts.js 的 isPercussionBank()）：bank MSB 120 是、121 不是，其他或沒送依是不是第 10 個 channel（GM1；GM2 §2.4／§3.3.1）
+ *   （依 percussionKit：打擊為 120/0 節奏，旋律為 121/0）
+ * @property {boolean} percussionKit  打擊：第一顆音之前有 GS「USE FOR RHYTHM PART」SysEx、或 XG System On 之後 bank MSB 127，照它（parts.js 的 percussionSwitches()）；
+ *   沒有就照 isPercussionBank()：bank MSB 120 是、121 不是，其他或沒送依是不是第 10 個 channel（GM1；GM2 §2.4／§3.3.1）
  * @property {{volume:number, pan:number, reverb:number, chorus:number}|null} init
  *   這個絕對 channel 在 tick 0 的混音初始化（CC7／10／91／93，不分哪一軌送的，缺的補 GM 預設）；tick 0 都沒送是 null（下游用 GM 預設 100／64／0／0）
  * @property {number} noteCount
