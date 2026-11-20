@@ -265,15 +265,13 @@ export function flushPreviousSong() {
   for (const s of [synth, synthHuman]) {
     if (!s) continue;
     for (let ch = 0; ch < channelCountOf(s); ch++) {
-      try {
-        if (!isDrumChannelIndex(ch)) {
-          s.controllerChange(ch, CC.BANK_MSB, 0);
-          s.controllerChange(ch, CC.BANK_LSB, 0);
-        }
-        s.controllerChange(ch, CC.ALL_SOUND_OFF, 0);
-        s.controllerChange(ch, CC.RESET_ALL, 0);
-        s.controllerChange(ch, CC.ALL_NOTES_OFF, 0);
-      } catch (e) {}
+      if (!isDrumChannelIndex(ch)) {
+        s.controllerChange(ch, CC.BANK_MSB, 0);
+        s.controllerChange(ch, CC.BANK_LSB, 0);
+      }
+      s.controllerChange(ch, CC.ALL_SOUND_OFF, 0);
+      s.controllerChange(ch, CC.RESET_ALL, 0);
+      s.controllerChange(ch, CC.ALL_NOTES_OFF, 0);
     }
   }
 }
@@ -376,5 +374,5 @@ export function setHumanGate(on) {
   const target = on ? HUMAN_EMPHASIS_GAIN : 0;
   if (target === lastGateTarget) return;
   lastGateTarget = target;
-  try { humanGain.gain.setTargetAtTime(target, audioCtx.currentTime, GATE_RAMP_TC); } catch (e) {}
+  humanGain.gain.setTargetAtTime(target, audioCtx.currentTime, GATE_RAMP_TC);
 }
