@@ -1,6 +1,5 @@
 // timeline.js — 時間層：速度表、tick ↔ 秒（midiTicksToSeconds／secondsToMIDITicks，名稱照官方 BasicMIDI）、拍號與調號表、port 偏移（絕對 channel）、小節與拍格線。
-// 規格寫進檔案的是格線（division、FF 51 速度、FF 58 拍號），足以把任何 tick 精確還原成第幾拍、第幾秒；格線上的音樂意義（小節線、弱起、強弱、swing、複拍子律動）
-// 規格沒寫，只能推導，推導必帶假設，只在明確標示假設的地方做。
+// 規格給的格線（division、FF 51、FF 58）足以把 tick 精確還原成拍與秒；小節線、弱起、強弱、複拍子律動規格沒寫，推導必帶假設，只在明確標示的地方做。
 
 import { META, makeWarn } from './midiFile.js';
 
@@ -49,7 +48,7 @@ export function buildTempoMap(tracks, division, warn) {
   if (!map.length || map[0].ticks !== 0) {
     map.unshift({ ticks: 0, microsecondsPerQuarter: DEFAULT_TEMPO_US, bpm: 60000000 / DEFAULT_TEMPO_US, seconds: 0 });
   }
-  // 逐段累積起始秒數，之後 midiTicksToSeconds 只要找到所屬區段再線性內插即可。
+  // 逐段累積起始秒數，換算時找到所屬區段再線性內插
   if (division.type === 'ppq') {
     for (let i = 1; i < map.length; i++) {
       const prev = map[i - 1];
@@ -79,8 +78,7 @@ export function makeMidiTicksToSeconds(tempoMap, division) {
   };
 }
 
-// midiTicksToSeconds 的反函數（名稱照官方 BasicMIDI.secondsToMIDITicks）：tick → 秒是嚴格遞增的分段線性函數，反函數也是分段線性，
-// 先用每段起始秒數（seg.seconds，嚴格遞增）二分搜尋所屬區段，再在區段內反解。回傳值可以是小數。
+// midiTicksToSeconds 的反函數（分段線性）：用每段起始秒數二分搜尋區段，再反解。回傳值可以是小數
 export function makeSecondsToMIDITicks(tempoMap, division) {
   if (division.type === 'smpte') {
     return (seconds) => seconds * division.ticksPerSecond;
@@ -137,8 +135,9 @@ export function buildKeySignatures(tracks) {
   );
 }
 
-// 每條 track 的 channel 偏移（絕對 channel＝軌內 channel＋偏移），跟官方 SpessaSynth 一致：沒指定 port（FF21）的 track 用最小的已指定 port（都沒有就 0）；
-// 依軌序（只看有 channel 事件的軌）第一次出現的 port 配偏移 0、16、32…，用的是出現順序而非 port 數值。
+// 每條 track 的 channel 偏移（絕對 channel＝軌內 channel＋偏移）：沒有 FF21 的 track 用最小的已指定 port（都沒有就 0）；
+// 依軌序（只看有 channel 事件的軌）第一次出現的 port 配 0、16、32…（出現順序，不是 port 數值）。
+// 規則同官方 core 4.4.10，差別：官方沒有 FF21 時會從軌名猜 port（這裡刻意不猜）；同軌中途換 port 時官方連前一個 port 也配偏移（這裡只用最後一個並警告）。
 export function buildPortOffsets(tracks) {
   const withChannels = tracks.filter((t) => t.channels.length);
   const given = withChannels.filter((t) => t.port !== null).map((t) => t.port);
@@ -153,7 +152,7 @@ export function buildPortOffsets(tracks) {
   return offsets;
 }
 
-// 小節與拍格線不塞進 parseMidi() 的回傳值：排程器目前不用它，逐音放行只看 startTick。
+// 小節與拍格線不放進 parseMidi() 的回傳值：目前沒有地方用到，放行只看 startTick。
 
 /**
  * @typedef {{index:number, startTick:number, endTick:number, startSeconds:number,

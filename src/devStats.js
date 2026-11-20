@@ -26,7 +26,7 @@ window.__stats = () => {
 
 window.__pressLog = midiPlayer.pressLog;
 
-// __tryMode()：看 1-B 的 dev 開關（scheduler.js 的 cfg.modes，預設全關＝原本的行為）。__tryMode('keyboard', { oneSlice: true }) 改 PC 鍵盤手那組、'gesture' 改揮手那組，回傳改完的開關。
+// __tryMode()：dev 開關（scheduler.js 的 cfg.modes，預設全關）。__tryMode('keyboard', { oneSlice: true }) 改 PC 鍵盤手那組、'gesture' 改揮手那組，回傳改完的開關。
 //   oneSlice：一下推進一個垂直切片（近距起音分組只留和弦內的時間差，不做按不及）；holdToNext：讀法 B，他的音一律響到他的下一個起音（鍵盤開了就不再用放開鍵收音）。
 // 播放中（含暫停）改的話從目前位置接續生效；其他狀態下一次 ▶ 重新載入時生效。重新整理頁面就回到預設。
 window.__tryMode = (source, patch) => (source === undefined ? midiPlayer.devModes() : midiPlayer.setDevModes(source, patch ?? {}));

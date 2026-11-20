@@ -42,14 +42,14 @@ const CHANNEL_DATA_BYTES = Object.freeze({
   0x80: 2, 0x90: 2, 0xa0: 2, 0xb0: 2, 0xc0: 1, 0xd0: 1, 0xe0: 2,
 });
 
-// 各事件的 data1／data2 意義（解析後原樣保留，不另外複製成語意欄位，避免兩份資料不同步）：
+// 各事件的 data1／data2 意義（原樣保留，不另外複製成語意欄位，免得兩份不同步）：
 //   noteOff / noteOn        data1 = 音高 0~127        data2 = 力度（noteOn 力度 0 等同 noteOff）
 //   polyAftertouch          data1 = 音高              data2 = 壓力
 //   controlChange           data1 = controller 編號   data2 = 值
 //   programChange           data1 = 音色編號          data2 = 0（無此位元組）
 //   channelAftertouch       data1 = 壓力              data2 = 0（無此位元組）
 //   pitchBend               data1 = LSB               data2 = MSB（合成值 = (data2 << 7) | data1，中心 8192）
-// 實際要用的「音符」請直接讀 parsed.notes，那裡已經把 on/off 配對好了。
+// 音符請讀 parsed.notes（on/off 已配對）
 
 // 合理的 tick 上限：一般檔案遠小於這個數字（480 tpq 的 3 分鐘曲子約 8 萬 tick）；超過多半是 delta-time 損毀。只警告不拒絕。
 const MAX_PLAUSIBLE_TICK = 1e7;
@@ -278,8 +278,7 @@ function parseTrack(body, trackIndex, warn) {
   let port = null;
 
   while (r.remaining > 0) {
-    // 一軌從中間壞掉（截斷、非法的 System Common／Real-Time 狀態位元組、running status 沒有前導）不該讓整份 parseMidi 失敗：
-    // 吞下這一軌的 MidiParseError、保住已解析的事件、記警告後停在這裡，其餘的軌照常解析
+    // 一軌中途壞掉（截斷、非法狀態位元組、running status 沒有前導）不讓整份失敗：保住已解析的事件、警告後停在這裡，其餘的軌照常解析
     try {
       tick += r.vlq(`track ${trackIndex} 的 delta-time`);
 
@@ -287,12 +286,10 @@ function parseTrack(body, trackIndex, warn) {
       if (status & 0x80) {
         r.pos++;
         if (status < 0xf0) {
-          // channel message：更新 running status，重新開始追蹤有沒有被 meta／SysEx 穿過。
           runningStatus = status;
           runningStatusSurvivedMeta = false;
         } else if (runningStatus) {
-          // meta／SysEx：規格對寫檔端建議送完整狀態位元組，但讀檔端不該因此拒絕檔案——不清 runningStatus，只記下穿過了 meta／SysEx，
-          // 供偵測到沿用時決定要不要警告（FluidSynth、spessasynth、midi-file、mido 都不會因此清掉 running status）
+          // meta／SysEx 不清 running status（FluidSynth、spessasynth、midi-file、mido 都不清），只記下穿過了，沿用時警告
           runningStatusSurvivedMeta = true;
         }
       } else if (runningStatus) {
@@ -324,8 +321,8 @@ function parseTrack(body, trackIndex, warn) {
         }
         else if (type === META.PORT) {
           if (port === null) port = ev.port ?? null; // 之後若又出現不同的值，取最後一個（官方 SpessaSynth 整條軌用最後的 port）
-          // FF 21（Port）不在 RP-001 正式定義的 meta 清單裡，是業界（Cakewalk、Cubase 等）慣例；RP-019 的 Device Name 隱含「一軌對應一個裝置」，但那是推論不是規定。
-          // 中途改變就違反這個慣例；整條軌一律用最後的 port 算絕對 channel（buildPortOffsets()），同軌重複的 channel 號可能因此被誤併成同一個 staff。
+          // FF 21 不在 RP-001 的正式清單裡，是業界慣例（一軌一個裝置）。中途改變時整條軌用最後的 port（buildPortOffsets()），
+          // 同軌重複的 channel 號可能因此被誤併成同一個 staff
           else if (ev.port !== port) {
             warn(`track ${trackIndex} 的 tick ${ev.ticks}：MIDI Port（FF 21，業界慣例欄位，非 RP-001 正式定義）中途從 ${port} 改成 ${ev.port}，違反「一軌對應一個裝置」的慣例，整條軌改用最後的 port`);
             port = ev.port;
@@ -355,7 +352,7 @@ function parseTrack(body, trackIndex, warn) {
         channels.add(channel);
         events.push({ ticks: tick, kind: 'channel', type, channel, data1, data2 });
       } else {
-        // F1~F6、F8~FE 依規格不得出現在 SMF；出現就無從得知它佔幾個位元組，硬猜只會讓整軌解析錯位
+        // F1～F6、F8～FE 不得出現在 SMF；不知道佔幾個位元組，硬猜只會讓整軌錯位
         throw new MidiParseError(
           `track ${trackIndex} 的 tick ${tick} 出現不該存在於 MIDI 檔案的狀態位元組 0x${status.toString(16)}`
         );
@@ -384,7 +381,7 @@ function parseTrack(body, trackIndex, warn) {
   };
 }
 
-// RP-001 p.7~9 講的是「應該放在哪裡」的慣例，不是位元組合法性：違反不代表損毀，常見記譜軟體也不見得遵守，所以只在違反時警告，方便追查怪異來源的檔案
+// RP-001 p.7～9 的擺放慣例：違反不代表損毀（記譜軟體也不見得遵守），只警告，方便追查怪檔
 function validateStructuralConventions(tracks, format, warn) {
   const firstTrack = tracks[0];
   if (firstTrack) {
@@ -412,8 +409,8 @@ function validateStructuralConventions(tracks, format, warn) {
       warn(`track ${track.index} 的 tick ${ev.ticks}：Sequence/Track Name（FF 03）沒有出現在 tick 0（RP-001 規定若有必須在 tick 0）`);
     }
   }
-  // format 1：tempo map（FF 51／FF 58）規定放第一軌，SMPTE Offset（FF 54）在其他軌沒有意義（RP-001 p.9）。與第一軌完全相同（種類、tick、內容）的不報
-  // （很多編曲軟體每條軌都抄一份拍號，照樣有效）；不同的才報，依種類彙整成一則（含次數與第一個的位置）
+  // format 1：FF 51／58 規定放第一軌，FF 54 在其他軌沒有意義（RP-001 p.9）。跟第一軌完全相同的不報（很多軟體每軌都抄一份拍號）；
+  // 不同的依種類彙整成一則
   if (format === 1) {
     const watched = {
       [META.SET_TEMPO]: ['Set Tempo（FF 51）', 'RP-001 規定 format 1 的 tempo map 必須放在第一軌'],

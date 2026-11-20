@@ -5,8 +5,7 @@
 export const DEFAULT_ARC_CONFIG = Object.freeze({
   minScale: 0.04,           // 尺度的下限，避免遠處偵測到的極小尺度把比值放大到離譜
   staleMs: 320,             // 距上一次餵值超過這麼久 → 視為剛回到鏡頭，這一段動作作廢重來
-  // 深度與死區：y 差先乘 aspect 再除以尺度。這兩個值原本（0.05、0.15）是在「y 以畫面高為單位、尺度以畫面寬為單位」的混合單位下訂的，
-  // 2026-10-28 換成同一把尺時乘上 16:9 的 0.5625，16:9 下觸發不變
+  // 深度與死區：y 差先乘 aspect 再除以尺度。原值 0.05、0.15 是在混合單位（y 以畫面高、尺度以畫面寬）下訂的，換成同一把尺時乘 16:9 的 0.5625，16:9 下觸發不變
   reversalNoiseFloor: 0.028, // Y 方向死區（尺度單位）：從谷底回升要超過這個幅度才算「確認回升」
   // 這兩個門檻比較嚴：每次判定成立都立刻前進一步、沒有緩衝空間，調嚴降低誤觸發
   minDepthRatio: 0.084,      // 這段下沉至少要多深（尺度單位）才算一次有效拋物線
@@ -172,11 +171,11 @@ const wristPoint = (track, idx) => {
 const TWO_HAND_MERGE_MS = 200;
 const SLOT_RELEASE_MS = 1000;    // 槽位連續不在場這麼久才把偵測器整個 reset
 
-// 各槽位（＝演奏者 ID − 1）的狀態在第一次用到時才建立（ensureSlot），這裡不必知道槽位上限。
+// 各槽位（＝演奏者 ID − 1）的狀態第一次用到才建（ensureSlot）
 const arcDetectors = [];
-// 合成雙手要比對「上一幀各手的 triggerSeq」：ArcDetector 的 triggerSeq 是累加值，不是「這一幀有沒有觸發」的旗標。
+// 上一幀各手的 triggerSeq（累加值，不是旗標）與合成狀態
 const arcLastSeqBySlot = [];
-// 槽位沒有 active track 時的「不在場起算時刻」（0＝在場）；在 SLOT_RELEASE_MS 之前只餵 null 讓追蹤中斷，避免閃斷一兩幀就丟掉進行中的動作。
+// 不在場的起算時刻（0＝在場）；SLOT_RELEASE_MS 之前只餵 null 讓追蹤中斷，閃斷一兩幀不丟掉進行中的動作
 const slotInactiveSinceMs = [];
 function ensureSlot(slot) {
   if (arcDetectors[slot]) return;
@@ -189,7 +188,7 @@ function ensureSlot(slot) {
   };
   slotInactiveSinceMs[slot] = 0;
 }
-// combinedSeq 刻意不歸零：接收端靠它「有沒有變」判斷新觸發，歸零會讓下一次比對誤判成新事件、平白多彈一個音；它單調遞增、永不重置。
+// combinedSeq 永不歸零：接收端靠它有沒有變判斷新觸發，歸零會被誤判成新的一下、多彈一個音
 const resetSlotDetectors = (arcSlot, lastSeq) => {
   arcSlot.left.reset(); arcSlot.right.reset();
   lastSeq.left = 0; lastSeq.right = 0;
@@ -201,7 +200,6 @@ const resetAllSlotDetectors = () => {
   }
 };
 
-// 餵一個在場槽位的骨架給它那對 ArcDetector；座標與尺度給逐幀紀錄。
 function updateSlotArc(arcDet, track, nowMs, captureMs) {
   const { scale, aspect } = track;
   const leftPoint = wristPoint(track, MP_LEFT_WRIST);
@@ -251,7 +249,7 @@ export function updateGestures(activeTracks, slotCount, nowMs, captureMs = nowMs
   const arcTroughMsBySlot = {};
   const presentSlots = [];
   const frame = [];
-  // 攤成「槽位 → track」查表；只處理 slotCount 個槽位，送出去的 map 不該帶永遠是空的槽位
+  // 只處理 slotCount 個槽位，送出去的 map 不帶永遠空的槽位
   const trackBySlot = new Array(slotCount).fill(null);
   for (const t of activeTracks) trackBySlot[t.slot] = t;
 
@@ -265,7 +263,7 @@ export function updateGestures(activeTracks, slotCount, nowMs, captureMs = nowMs
       presentSlots.push(slot + 1);
       arc = updateSlotArc(arcDet, track, nowMs, captureMs);
     } else {
-      // 不在場：兩隻手都餵「看不到」讓追蹤中斷；連續超過 SLOT_RELEASE_MS 才真的 reset（下次鎖進來從乾淨開始）。
+      // 不在場：餵「看不到」讓追蹤中斷；超過 SLOT_RELEASE_MS 才 reset
       if (slotInactiveSinceMs[slot] === 0) slotInactiveSinceMs[slot] = nowMs;
       if (nowMs - slotInactiveSinceMs[slot] > SLOT_RELEASE_MS) {
         resetSlotDetectors(arcDet, arcLastSeqBySlot[slot]);

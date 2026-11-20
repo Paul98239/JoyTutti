@@ -98,14 +98,14 @@ function applyUiFontSize() {
   const zoom = Math.min(3, Math.max(0.5, dpr / UI_FS_BASELINE_DPR));
   // innerWidth 受縮放影響，乘回 zoom 還原成實際像素寬
   const realWidth = window.innerWidth * zoom;
-  // 除數 90：約 1440px 實際寬時 ≈ 16px，1920 觸 19 上限、~1350 觸 15 下限。
+  // 除數 90：1440px 實際寬 ＝ 16px；1710px 以上是 19 上限、1350px 以下是 15 下限
   const preferred = Math.min(UI_FS_MAX, Math.max(UI_FS_MIN, realWidth / 90));
   // 除以 zoom：瀏覽器接著會再乘回 zoom，實際渲染大小只由 realWidth 決定。
   document.documentElement.style.setProperty('--ui-fs', `${preferred / zoom}px`);
 }
 
 // 選歌面板高度上限＝視窗底邊減面板頂端（#top-center-stack 底邊＋面板的上間距 0.5em，見 styles.css 的 .tl-popup），不管視窗比例或全螢幕都準。
-// 2026-11-19 起以視窗底邊為準：面板是 position:fixed 疊層的子元素、不在 16:9 框裡，比 16:9 高的螢幕（16:10 等）可以多用框上下的空白（2026-11-20 框加回細框線後仍是這樣：面板疊在框線之上）。空間小到誇張時退回下限，不讓面板消失。
+// 以視窗底邊為準、不是 16:9 框：面板是 position:fixed 疊層的子元素、疊在框之上，比 16:9 高的螢幕（16:10 等）可以多用框上下的空白。空間小到誇張時退回下限，不讓面板消失。
 const POPUP_BOTTOM_MARGIN_PX = 8;
 const POPUP_MAX_HEIGHT_FLOOR_PX = 120;
 const POPUP_TOP_GAP_EM = 0.5;
@@ -124,12 +124,12 @@ function mountUiScale() {
     applyPopupMaxHeight();
   }));
   // 疊層高度不只跟著視窗變：歌名換行、控制列換列也會改變它，而且發生在播放器區塊重繪的當下（比 renderPopupPanels 晚），所以看疊層本身的尺寸變化。
-  // 面板是 position:absolute，不算進疊層的尺寸，改面板高度不會再觸發這裡（2026-11-19 code review 後改，原本只在打開面板時量一次）。
+  // 面板是 position:absolute，不算進疊層的尺寸，改面板高度不會再觸發這裡。
   new ResizeObserver(rafThrottle(applyPopupMaxHeight)).observe(topStack);
 }
 
-// 系統控制列（鏡頭開關／現場人數／重置骨架 ID）。現場人數沒有預設值，選之前 vision.js 不推論。選人數通常要等 1~2 秒模型重建，期間 vision.js 用舊實例照常推論，
-// 所以下拉不鎖，靠 POSE_COUNT_DEBOUNCE_MS 防抖與 runPoseCountSwitch() 單飛擋快速連續切換；真的生效那一刻等於重置骨架 ID。
+// 系統控制列（鏡頭開關／現場人數／重置骨架 ID）。現場人數沒有預設值，選之前不推論。換人數要等 1～2 秒（期間用舊的照常推論），
+// 下拉不鎖，靠防抖與單飛（runPoseCountSwitch）擋快速連續切換；生效那一刻等於重置骨架 ID。
 const cameraBtn = document.getElementById('btn-camera-toggle');
 const poseCountSelect = document.getElementById('poseCountSelect');
 const resetBtn = document.getElementById('btn-reset-pose');
@@ -202,7 +202,7 @@ function renderSystemBar({ ui, camera, poseCount }) {
   cameraBtn.classList.toggle('is-on', camera.on);
   cameraBtn.disabled = camera.busy;
 
-  // 下拉刻意不鎖（鎖 1~2 秒等於選錯不能改），靠防抖＋單飛；切換成功與否都由 getPoseCount() 校正畫面上的值
+  // 下拉不鎖（鎖 1～2 秒等於選錯不能改）；成功與否都由 getPoseCount() 校正畫面上的值
   const value = poseCount ? String(poseCount) : ''; // 0（還沒選）對不到任何 option
   if (poseCountSelect.value !== value) poseCountSelect.value = value;
 

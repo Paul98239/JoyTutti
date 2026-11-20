@@ -1,6 +1,6 @@
-// performancePlan.js — 演奏計畫：樂譜＋指派 → 譜表（staff：發聲與輸出 channel 的單位）、每位演奏者一份計畫、伴奏一份計畫、總音數與 hold 容差上限。載入、改指派時重建，之後不變；
-// 游標、錨點、佇列這些執行期狀態在 scheduler.js。一個 part 底下有一個以上 staff（鋼琴兩行譜＝兩個；切分規則見 parts.js）；指派以 part 為單位，發聲與輸出 channel 以 staff 為單位。
-// 控制器屬於輸入 channel（parser 的 channelLanes），扇出到所有來源是該 channel 的譜表（lanes），再依擁有者拆給演奏者或伴奏；播放中途的控制器跟音一樣依起音切段。
+// performancePlan.js — 演奏計畫：樂譜＋指派 → 譜表（staff）、每位演奏者一份計畫、伴奏一份計畫。載入、改指派時重建，之後不變；執行期狀態在 scheduler.js。
+// 指派以 part 為單位，發聲與輸出 channel 以 staff 為單位（鋼琴兩行譜＝兩個 staff）。
+// 控制器屬於輸入 channel，扇出到來源是該 channel 的譜表，再依擁有者拆給演奏者或伴奏；播放中途的控制器跟音一樣依起音切段。
 
 import { rateBoundsFor } from './tempo.js';
 import { holdCapTicksFor, holdGapTolerance } from './voices.js';
@@ -21,7 +21,7 @@ function makeStaff(spec, slot, notes, kind, channel) {
     sourceChannel: spec.channel,   // 檔案裡的（絕對）輸入 channel：控制器軌依它扇出（舊資料形狀沒有）
     program: spec.program ?? 0, bank: spec.bank, init: spec.init ?? null, percussionKit: !!spec.percussionKit,
     baseVolume: spec.init?.volume ?? GM_DEFAULT_MIXER.volume, // 檔案 tick 0 的 CC7，沒有就是 GM 預設 100；載入時送一次
-    sounding: new Map(),    // 音高 → [{ endTick, offMs }]：正在響的音，同音高重疊時先進先出收音（voices.js 操作它）
+    sounding: new Map(),    // 音高 → 正在響的音的佇列（voices.js 的 VoiceLedger 操作）
   };
 }
 
@@ -71,10 +71,8 @@ function buildStaves(score, assignments, router) {
   return { staves, unplaced };
 }
 
-// 播放中途的 bank select 若會讓輸出 channel 在打擊與旋律之間互換（GM2 §2.4／§3.3.1：MSB 120／121 才改變角色，其他值維持這個譜表目前的角色），不送到這個譜表：
-// 輸出 channel 是依打擊／旋律分配的，中途互換要重新分配（不做，見 buildControls 的警告）。
-// 跟譜表自己的 percussionKit 比，不重算 isPercussionBank(值, channel)：那會把「其他值」當成回到第 10 個 channel 的預設角色，被 GS／XG 切換過角色的譜表
-// （parts.js 的 percussionSwitches()）途中送 CC0=0、8、127 這類一般的 bank 也會被當成互換而丟掉（2026-11-19 code review 發現）。
+// 播放中途會讓輸出 channel 在打擊與旋律之間互換的 bank select（GM2 §2.4／§3.3.1：只有 MSB 120／121 改變角色）不送：輸出 channel 是依角色分配的，不做重新分配。
+// 跟譜表自己的 percussionKit 比、不重算 isPercussionBank()：那會把其他值當成回到預設角色，被 GS／XG 切換過的譜表途中送一般 bank 也會被丟掉。
 export const switchesKit = (staff, ev) => ev.type === 'controlChange' && ev.data1 === 0
   && (ev.value === BANK_MSB_RHYTHM ? !staff.percussionKit : ev.value === BANK_MSB_MELODY && staff.percussionKit);
 
@@ -82,8 +80,7 @@ export const switchesKit = (staff, ev) => ev.type === 'controlChange' && ev.data
 const isPatchEvent = (ev) => ev.type === 'programChange' || (ev.type === 'controlChange' && (ev.data1 === 0 || ev.data1 === 32));
 export const stateEvents = (events) => events.filter((ev) => ev.ticks > 0 || !isPatchEvent(ev));
 
-// 每條控制器軌扇出到所有「來源是這個輸入 channel」而且分到了輸出 channel 的譜表；同一個輸出（合成器＋channel）只算一次
-// （同一種鼓組的打擊譜表共用一個打擊槽）。回傳 輸入 channel → { events: 控制器軌, targets: 譜表 }，只收有事件也有目標的。
+// 控制器軌扇出到來源是這個輸入 channel 的譜表；同一個輸出（合成器＋channel）只算一次（同鼓組共用打擊槽）。回傳 輸入 channel → { events, targets }
 function buildLanes(score, staves) {
   const lanes = new Map();
   for (const [channel, events] of score.channelLanes ?? []) {
@@ -119,9 +116,8 @@ export function sysexAction(ev) {
   return 'skip';
 }
 
-// 播放中途（tick > 0）的控制器與整體參數 SysEx，依檔案順序（tick → 軌序 → 軌內序）；tick 0 的是狀態，載入時一次送（scheduler.js 的 _sendInitialState）。
-// 控制器分成送真人合成器（human）與電腦合成器（assist）的目標譜表，SysEx 是 { ev, sysex: true } 兩邊都送。
-// 會讓打擊與旋律互換的 bank select 不送（switchesKit）；略過的 SysEx 與 bank select 整首各警告一次。
+// 播放中途（tick > 0）的控制器與整體參數 SysEx，依檔案順序；tick 0 的是狀態，載入時一次送。SysEx 是 { ev, sysex: true } 兩邊都送。
+// 略過的 SysEx 與 bank select 整首各警告一次。
 function buildControls(score, lanes) {
   const controls = [];
   let switched = 0;
@@ -146,7 +142,7 @@ function buildControls(score, lanes) {
   return controls.sort((a, b) => byFileOrder(a.ev, b.ev));
 }
 
-// 某 tick 屬於第幾段：第 k 個 driver 起音（含）到第 k+1 個之前＝第 k+1 段，第一個 driver 起音之前＝第 0 段（前奏）。二分搜尋 upper bound，driverTicks 遞增
+// tick 屬於第幾段：第 k 個 driver 起音（含）到第 k+1 個之前＝第 k+1 段，第一個之前＝第 0 段（前奏）
 export function sliceOfTick(driverTicks, tick) {
   const a = driverTicks;
   let lo = 0, hi = a.length;
@@ -154,14 +150,14 @@ export function sliceOfTick(driverTicks, tick) {
   return lo;
 }
 
-// 指派下拉的順序：PC 鍵盤手（唯一的非數字槽位）在前，再來演奏者 1~N。演奏者群組與名單同時開始時都照它排
+// 指派下拉的順序：PC 鍵盤手在前，再來演奏者 1～N
 export const slotOrder = (slot) => (typeof slot === 'number' ? slot : 0);
 
 // 沒有任何演奏者（整首自動播放）時排程器用的空計畫：只有第 0 段，伴奏從開頭照原速放完（同一條程式路徑）
 export const emptyPerformerPlan = () => ({ slot: null, staffIds: new Set(), driverSegs: [], driverTicks: [], rateBounds: rateBoundsFor([]), controls: [], controlTicks: [], hasPrelude: false, rests: [] });
 
-// 一個人的休止：他所有音的 [起音, 結尾) 合起來之後的空檔（notes 依起音排序）。空檔不超過 hold 的容差（匯出器縮短的相連音：MuseScore 少 1 tick、
-// 部分匯出器統一縮短約 5.4%）不算；第一個音之前與最後一個音之後不算（前奏另有前奏鎖，最後一個音之後他已經彈完）。MIDI 沒有休止的編碼，只能這樣推算。
+// 一個人的休止：他所有音的 [起音, 結尾) 合起來之後的空檔（MIDI 沒有休止的編碼，只能推算）。不超過 hold 容差的不算（匯出器縮短的相連音）；
+// 第一個音之前（有前奏鎖）與最後一個音之後不算。
 export function computeRests(notes, holdCapTicks) {
   const rests = [];
   let endMax = -Infinity, endStart = 0;   // 目前最晚的結尾，與那顆音的起音（容差依它到下一個起音的間隔）
@@ -173,10 +169,9 @@ export function computeRests(notes, holdCapTicks) {
 }
 
 // 一位演奏者（槽位 slot）的計畫：
-//  · driverSegs：沿用 parser 的 segment 但只留他的譜表的音；整個 segment 沒有他的音就不收（一次按鍵不該只推進一個不會響的 segment）。
-//  · controls／controlTicks：送他的譜表的控制器（依檔案順序）；落在他某個起音 tick 上的控制器屬於那個起音啟動的段，跟同 tick 的音一起在按下的那次呼叫裡送。
-//  · hasPrelude：他的第一個起音之前有別的音（伴奏或別人的聲部）＝前奏鎖要生效（純 tick 比較）；rateBounds：依他自己的起音間隔的速度區間。
-//  · rests：他的休止區間 [起, 迄)（computeRests）；firstTick／lastTick：他的第一個與最後一個起音。
+//  · driverSegs：parser 的 segment 只留他的音；沒有他的音的 segment 不收（按一下不該只推進不會響的 segment）。
+//  · controls：送他的譜表的控制器；落在他起音 tick 上的跟同 tick 的音在按下的那次呼叫裡一起送。
+//  · hasPrelude：他的第一個起音之前有別的音＝前奏鎖生效；rateBounds：依他自己的起音間隔；rests：休止區間 [起, 迄)。
 function buildPerformer(score, staves, slot, controls, earliestTick, holdCapTicks) {
   const staffIds = new Set([...staves.values()].filter((s) => s.kind === 'human' && s.slot === slot).map((s) => s.id));
   const driverSegs = [], driverTicks = [];
@@ -204,8 +199,7 @@ function buildPerformer(score, staves, slot, controls, earliestTick, holdCapTick
   };
 }
 
-// 伴奏（沒被指派的譜表）的計畫：音依起音排（同 score.notes 的順序），控制器只留送電腦合成器的目標與整體參數 SysEx（依檔案順序）；
-// 不事先切段，排程器依帶頭的人的起音用 *Ticks 二分搜尋切。
+// 伴奏（沒被指派的譜表）的計畫：不事先切段，排程器依帶頭的人的起音用 *Ticks 二分搜尋切
 function buildAccompaniment(score, staves, controls) {
   const followers = [];
   for (const note of score.notes) {
@@ -223,7 +217,7 @@ function buildAccompaniment(score, staves, controls) {
 /**
  * 這一輪的演奏計畫（載入、改指派時重建；沒有樂譜時是空計畫）。router 分配輸出 channel（voices.js 的 allocate()）。
  * @returns {{ staves: Map<string, object>, unplaced: string[], totalNotes: number, holdCapTicks: number, lanes: Map<number, object>, globalSysex: object[], performers: object[], accompaniment: object }}
- *   staves：staffId → staff；unplaced：輸出 channel 排不進去（旋律 staff 超過 60 個、鼓組超過 4 種）的 staff，這一輪不出聲；
+ *   staves：staffId → staff；unplaced：輸出 channel 排不進去的 staff，這一輪不出聲（synth.js 先依 portsNeeded() 補足 port，正常是空的）；
  *   totalNotes：所有排得進 channel 的音；holdCapTicks：hold 對齊容差上限；lanes：控制器軌的扇出（buildLanes）；
  *   globalSysex：要送的整體參數 SysEx（依檔案順序，載入時送界線之前的）；performers：每位演奏者一份（依指派下拉順序，只收指派的譜表有音的槽位）；
  *   accompaniment：伴奏一份。

@@ -1,6 +1,6 @@
-// midiParser.js — 解析入口與資料型別，對外唯一出口：呼叫端一律只 import 這個檔。parseMidi(await file.arrayBuffer())；
-// parsed.parts＝聲部（可指派的單位，底下是 staff＝有音符的 (track, 絕對 channel)；切分規則見 parts.js），parsed.segments＝全曲垂直切片（scheduler.js 一次觸發放行一個），parsed.notes＝連同 parts 建立 staff。
-// 分層（每層只依賴下面的層）：midiFile.js 讀檔 → timeline.js 時間（速度表、tick ↔ 秒、拍號／調號、port 偏移、格線）→ parts.js（名稱表、聲部切分、音符配對、控制器軌／系統軌／文字軌、控制器狀態與 chase）；本檔依序呼叫各層並轉出它們的名稱。
+// midiParser.js — 解析入口與資料型別，對外唯一出口：呼叫端只 import 這個檔。parseMidi(await file.arrayBuffer())。
+// parsed.parts＝聲部（可指派的單位，底下是 staff＝有音符的 (track, 絕對 channel)），parsed.segments＝全曲垂直切片（排程器一次放行一個）。
+// 分層（每層只依賴下面的層）：midiFile.js 讀檔 → timeline.js 時間 → parts.js 聲部、音符、控制器；本檔依序呼叫並轉出它們的名稱。
 
 import { makeWarn, readSmf, findLastVoiceEventTick } from './midiFile.js';
 import { buildTempoMap, makeMidiTicksToSeconds, makeSecondsToMIDITicks, buildTimeSignatures, buildKeySignatures, buildPortOffsets } from './timeline.js';
@@ -11,8 +11,8 @@ export { gmProgramNameZh, midiNoteName, ChannelStateTracker, controllerStateAt, 
 export { CC, DRUM_CHANNEL, BANK_MSB_RHYTHM, BANK_MSB_MELODY, PITCH_BEND_CENTER, RESET_CC, PARAMETER_CC, GM_DEFAULT_MIXER } from './parts.js';
 export { buildMeasureGrid, buildBeatGrid } from './timeline.js';
 
-// 全曲的垂直切片（名稱借自 MuseScore 的 Segment）：notes 已依 startTick 排序，相同 startTick 的音一定相鄰，線性掃描 O(n) 即可。
-// 排程器一次放行一個 segment，全曲所有聲部在同一次呼叫內一起起音，上下對齊由結構保證，不靠時間比對。
+// 全曲的垂直切片（名稱借自 MuseScore 的 Segment）：notes 已依 startTick 排序，線性掃描即可。
+// 一次放行一個 segment，所有聲部在同一次呼叫內一起起音，上下對齊由結構保證、不靠時間比對。
 export function buildSegments(notes) {
   const segments = [];
   for (const note of notes) {
@@ -23,8 +23,8 @@ export function buildSegments(notes) {
   return segments;
 }
 
-// 資料模型的型別（JSDoc typedef）：手寫一份而不用 ReturnType<typeof parseMidi>：TypeScript 把 .js 的物件字面量當「開放的」，讀到不存在的屬性不會報錯，要抓錯字就得有「封閉」的宣告。
-// 改了 midiFile.js 的 parseTrack、parts.js 的 makeNote／collectPartsAndNotes 的欄位時同步改這裡。其他模組用 import('./midiParser.js').ParsedMidi 取得。
+// 資料模型的 JSDoc typedef 手寫，不用 ReturnType<typeof parseMidi>：.js 的物件字面量是開放的，讀錯欄位不會報錯。
+// 改了 midiFile.js 的 parseTrack、parts.js 的 makeNote／collectPartsAndNotes 的欄位時同步改這裡。
 
 /**
  * channel voice message（note-on／off、CC、program change、pitch bend…）。
@@ -96,7 +96,7 @@ export function buildSegments(notes) {
  * @property {string} staffId  所屬 staff（一個譜表 × 一個樂器 channel）
  * @property {number} trackIndex
  * @property {number} eventIndex  note on 在 tracks[trackIndex].events 的序號
- * @property {number} channel  絕對 channel：軌內 channel 加上 port 偏移（依 port 第一次出現的順序 +16，跟官方 SpessaSynth 一致）
+ * @property {number} channel  絕對 channel：軌內 channel 加上 port 偏移（見 timeline.js 的 buildPortOffsets()）
  * @property {number} midiNote  音高 0~127
  * @property {number} velocity  note-on 的力度
  * @property {number} startTick

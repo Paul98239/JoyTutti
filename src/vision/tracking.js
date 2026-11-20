@@ -1,5 +1,5 @@
-// tracking.js — 多人槽位追蹤與平滑：這一幀這個人該貼哪個已鎖定槽位、新面孔何時才能鎖定空位，加上逐節點的 One Euro 平滑（OneEuroFilter）。
-// 純粹依位置（螢幕座標接近程度，門檻依這個人的尺度縮放，見 bodyScaleOf）判斷，不用服裝顏色；ID 只是槽位編號的顯示提示，不做身分認回。
+// tracking.js — 多人槽位追蹤與平滑：偵測該貼哪個已鎖定槽位、新面孔何時鎖定空位，加上逐節點的 One Euro 平滑。
+// 純粹依位置（門檻依這個人的尺度縮放，見 bodyScaleOf）判斷；ID 只是槽位編號，不做身分認回。
 
 const round3 = (v) => Math.round(v * 1000) / 1000;
 
@@ -10,54 +10,45 @@ export const DEFAULT_TRACKING_CONFIG = Object.freeze({
   // 位置門檻＝max(gatePos, gatePosRatio × 這個人的尺度)：同一個動作站得近的人在正規化座標上走得比較遠；絕對值下限給遠處的小人。
   gatePos: 0.15,
   gatePosRatio: 0.45,
-  // 漏配緩衝期內（missCount > 0 且漏配 ≤ missGraceMs）門檻放寬到 max(上面的門檻, graceGate, graceGateRatio × 尺度)：MediaPipe 在「手在頭部交叉」這類姿勢期間
-  // 會把整個人的位置估歪一大段，放寬讓附近的偵測仍能配對回他本人。這段放寬只在單人、或鄰居很遠時真的生效（見 ambiguityRatio）。
+  // 漏配緩衝期內（漏配 ≤ missGraceMs）門檻放寬到 max(上面, graceGate, graceGateRatio × 尺度)：手在頭部交叉這類姿勢時 MediaPipe 會把整個人估歪一大段。
+  // 只在單人或鄰居很遠時真的生效（見 ambiguityRatio）。
   graceGate: 0.45,
   graceGateRatio: 1.5,
-  // 歧義收斂：不管上面算出多寬，門檻一律再夾到「到最近的另一個槽位的距離 × ambiguityRatio」以內（下限 ambiguityFloorRatio × 尺度，保留真人一幀內的正常位移）。
-  // 單人時沒有鄰居，門檻就是上面的寬鬆值；多人站成一排時自動縮到鄰居距離的一半。
+  // 歧義收斂：門檻再夾到「最近另一個槽位的距離 × ambiguityRatio」以內（下限 ambiguityFloorRatio × 尺度，保留一幀內的正常位移）。
   ambiguityRatio: 0.5,
-  // 站得很近時每個人周圍仍保留的最小防護半徑（尺度單位）。多人近距離實測骨架會互相黏到對方身上，所以調高到 0.4 讓門檻不會收斂得太窄；
-  // 沒辦法用公式算準，需照實機測試繼續調。
+  // 站得很近時仍保留的最小半徑（尺度單位）：多人近距離實測骨架會黏到對方身上，調高到 0.4；算不準，要照實機繼續調。
   ambiguityFloorRatio: 0.4,
 
-  // 「同一具身體」的判準（dedupe／幽靈抑制／配對讓先鎖定的先挑／硬保險四處共用，見 isSameBody）：
-  // 兩筆偵測（或兩個槽位）的肩膀中點距離 < max(sameBodyDist, sameBodyRatio × 較小的尺度) 就視為同一具身體：兩個真人的肩膀中點不可能靠到半個肩寬以內，
-  // 而幽靈（MediaPipe 對同一具身體多吐一組骨架）是同一對肩膀、中點幾乎重合。取較小的尺度：站在使用者正後方、看起來比較小的第二個人，才不會被近處那個人的尺度吞掉。
+  // 「同一具身體」（isSameBody，四處共用）：肩膀中點距離 < max(sameBodyDist, sameBodyRatio × 較小的尺度)。兩個真人的肩膀中點不可能靠到半個肩寬以內，
+  // 幽靈（同一具身體多吐一組骨架）的中點幾乎重合。取較小的尺度：站在正後方、看起來較小的人才不會被近處那個人的尺度吞掉。
   sameBodyDist: 0.03,
   sameBodyRatio: 0.5,
-  // 「一具身體只能有一個 ID」的硬保險（_releaseDuplicateTracks）：兩個 live 槽位連續這麼久
-  // 都判定為同一具身體才釋放較晚鎖定的那個；單幀誤判不該砍掉一個正在使用的 ID。
+  // 硬保險（_releaseDuplicateTracks）：兩個槽位連續這麼久是同一具身體才釋放較晚鎖定的；單幀誤判不該砍掉正在用的 ID。
   duplicateTrackConfirmMs: 200,
 
-  // 候選人跨幀關聯的距離（「這一幀這筆偵測是不是上一幀那個候選人」），一樣以尺度為單位。
+  // 候選人跨幀關聯的距離（尺度單位）
   pendingAssocDist: 0.15,
   pendingAssocDistRatio: 1.0,
-  // 尺度本身也要平滑，否則單幀的雜訊會讓上面那些門檻跟著跳動；0.1 同我同事的數值。
+  // 尺度本身也平滑，否則門檻跟著單幀雜訊跳動；0.1 同我同事的數值。
   scaleEmaAlpha: 0.1,
 
-  // 繪製用的短暫保留（getDrawableTracks）：
-  // MediaPipe 偶爾漏一幀，已鎖定的人這一幀沒配對到偵測就會整具骨架眨一下，所以 getDrawableTracks() 把「最後一次配對到之後 drawHoldMs 內」的槽位也交給繪製端
-  // （100ms＝3 幀，人真的離開仍幾乎立刻消失）。手勢與在場名單仍用嚴格的 getActiveTracks()。
+  // 繪製用的短暫保留（getDrawableTracks）：MediaPipe 偶爾漏一幀，骨架會眨一下；100ms＝3 幀，人真的離開仍幾乎立刻消失。手勢與在場名單不用它。
   drawHoldMs: 100,
-  // 以下門檻以「毫秒」計而不是幀數，行為與幀率脫鉤。
+  // 以下以毫秒計（不是幀數），跟幀率脫鉤
   trackLossMs: 1500,      // 未匹配超過這段時間就釋放鎖定
   lockConfirmMs: 231,     // 新目標需持續出現這麼久才鎖定空位
-  // 可見度平滑＋遲滯：visibility 是唯一沒經過 OneEuroFilter 的欄位，在門檻附近抖動時手腕、腳踝這類邊緣關節會逐幀出現又消失。
-  // 先 EMA 壓雜訊，再用 on／off 兩道門檻留死區；結果寫進 smoothed[i].visible（布林），繪製端直接用。
+  // 可見度 EMA＋遲滯（on／off 兩道門檻）：沒有的話邊緣關節在門檻附近會逐幀閃；結果寫進 smoothed[i].visible，繪製端直接用。
   visibilityEmaAlpha: 0.3,
   visibilityOnGate: 0.55,
   visibilityOffGate: 0.45,
-  // 候選新目標（尚未鎖定）這一幀沒匹配到偵測時允許保留多久再丟棄（不讓累積時間歸零）：站在邊緣或背光的人偵測不穩，否則可能永遠湊不滿 lockConfirmMs。
-  // 能否鎖定仍要求這一幀確實有匹配到偵測，所以這個寬限不會讓早已離開的候選人憑空鎖到槽位。
+  // 候選人這一幀沒配到時保留多久（累積時間不歸零）：邊緣或背光的人偵測不穩，否則湊不滿 lockConfirmMs。鎖定仍要求這一幀有配到。
   pendingGraceMs: 400,
-  // 已鎖定槽位剛開始漏配、漏配時間落在 0~missGraceMs 時，逐幀配對改用 graceGate 放寬門檻；固定寬限長度（不隨 missCount 遞減），避免姿勢做到一半保護力就先失效
+  // 漏配緩衝期長度（固定，不隨 missCount 遞減：姿勢做到一半保護不能先失效）
   missGraceMs: 1320,
 
-  // 非人物體防呆（hasHumanGeometry／buildDetection）。幾何檢查（肩寬範圍、肩膀要在髖部上方）是硬拒絕；可見度分兩級：
-  //   - 嚴格（coreVisibilityMin／overallVisibilityMin）：鎖定新候選人時用，可見度很低的骨架多半是對背景圖案或半個身體的誤判，不該拿到 ID。
-  //   - 寬鬆（…Tracked）：延續已在追蹤的人時用；手臂橫過胸前、側身時另一側肩膀可見度常掉到 0.4~0.5，這一幀的骨架仍比「不畫」更接近事實。
-  //   低於寬鬆門檻的偵測在 buildDetection 就回傳 null（連追蹤都不參與）。
+  // 非人物體防呆。幾何（肩寬範圍、肩在髖上方）是硬拒絕；可見度分兩級：
+  //   - 嚴格：鎖定新候選人用，可見度很低的多半是背景圖案或半個身體的誤判。
+  //   - 寬鬆（…Tracked）：延續已在追蹤的人用；手臂橫過胸前、側身時另一側肩膀常掉到 0.4～0.5。低於寬鬆門檻的連追蹤都不參與。
   coreVisibilityMin: 0.5,
   overallVisibilityMin: 0.3,
   coreVisibilityMinTracked: 0.3,
@@ -69,8 +60,7 @@ export const DEFAULT_TRACKING_CONFIG = Object.freeze({
 
 function isFinitePoint(p) { return !!p && Number.isFinite(p.x) && Number.isFinite(p.y); }
 
-// 非人物體防呆：過濾 MediaPipe 對背景圖案／假人模型等非人物件誤判出的姿勢。
-// 幾何上像不像一個人：肩寬在合理範圍、髖部可信時肩膀要在髖部上方。這是硬拒絕。
+// 幾何上像不像一個人（擋背景圖案、假人模型的誤判）：肩寬合理、髖部可信時肩在髖上方
 function hasHumanGeometry(landmarks, cfg, aspect) {
   const lS = landmarks[11], rS = landmarks[12];
   const lH = landmarks[23], rH = landmarks[24];
@@ -78,11 +68,11 @@ function hasHumanGeometry(landmarks, cfg, aspect) {
   const shoulderWidth = Math.hypot(lS.x - rS.x, (lS.y - rS.y) * aspect);
   if (shoulderWidth < cfg.minShoulderWidth || shoulderWidth > cfg.maxShoulderWidth) return false;
 
-  // 坐姿或下半身被裁切時髖部可見度本來就會偏低，所以只在髖部可信時才檢查「肩膀應在髖部上方」。
+  // 坐姿或下半身被裁時髖部可見度本來就低，只在可信時才檢查
   const hipVis = Math.min(lH.visibility ?? 0, rH.visibility ?? 0);
   if (hipVis >= cfg.visibilityThreshold) {
     const shoulderMidY = (lS.y + rS.y) / 2, hipMidY = (lH.y + rH.y) / 2;
-    if (shoulderMidY >= hipMidY) return false; // 肩膀理應在髖部上方（image y 較小）
+    if (shoulderMidY >= hipMidY) return false;
   }
   return true;
 }
@@ -100,16 +90,15 @@ function shoulderVisibility(landmarks) {
   return Math.min(landmarks[11].visibility ?? 0, landmarks[12].visibility ?? 0);
 }
 
-// 由原始 landmark 建立一筆「偵測」：肩膀中點是位置匹配與「同一具身體」判定的唯一依據；回傳 null 代表數值異常、幾何不像真人、或可見度連寬鬆門檻都不到，呼叫端須過濾掉。
-// aspect＝畫面高 ÷ 寬：正規化座標的 y 乘它才跟 x 同一把尺（尺度、距離、平滑的 y 速度、手勢的深度都用；track 與候選人也帶著它）。
+// 原始 landmark → 一筆偵測；null＝數值異常、不像人、或可見度不到寬鬆門檻。
+// aspect＝畫面高 ÷ 寬：y 乘它才跟 x 同一把尺（尺度、距離、平滑速度、手勢都用）。
 export function buildDetection(landmarks, { cfg = DEFAULT_TRACKING_CONFIG, world = null, aspect }) {
   const lShoulder = landmarks[11], rShoulder = landmarks[12];
   const lHip = landmarks[23], rHip = landmarks[24];
   if (![lShoulder, rShoulder, lHip, rHip].every(isFinitePoint)) return null;
   if (!hasHumanGeometry(landmarks, cfg, aspect)) return null;
 
-  // 可見度分兩級：連寬鬆門檻都不到的直接丟掉；過寬鬆但不過嚴格的偵測可以延續已經在追蹤
-  // 的人，但不能拿來鎖定新 ID（strictPlausible = false，_updatePendingCandidates 據此過濾）。
+  // 只過寬鬆門檻的可以延續已追蹤的人，但不能鎖定新 ID（strictPlausible）
   const shoulderVis = shoulderVisibility(landmarks);
   const meanVisibility = meanLandmarkVisibility(landmarks);
   if (shoulderVis < cfg.coreVisibilityMinTracked || meanVisibility < cfg.overallVisibilityMinTracked) return null;
@@ -117,25 +106,20 @@ export function buildDetection(landmarks, { cfg = DEFAULT_TRACKING_CONFIG, world
 
   const shoulderMidX = (lShoulder.x + rShoulder.x) / 2;
   const shoulderMidY = (lShoulder.y + rShoulder.y) / 2;
-  // 位置錨點就是肩膀中點：肩膀是全身最穩的兩個點（幾乎不會被裁到畫面外、很少被遮住），
-  // 而且同一具身體的幽靈骨架跟真人共用同一對肩膀——isSameBody 靠的就是這一點。
+  // 位置錨點＝肩膀中點：最穩（很少被裁或遮住），幽靈跟真人共用同一對肩膀（isSameBody 靠這一點）
   const centroid = { x: shoulderMidX, y: shoulderMidY };
-  // scale＝「這個人在畫面上有多大」（所有位置門檻、平滑速度與手勢門檻的單位），見 bodyScaleOf；
-  // 它跟「離攝影機多近」正相關，候選新身分多於空槽位時優先鎖定最靠近鏡頭的人。
+  // scale＝這個人在畫面上多大（門檻、平滑速度、手勢的單位）；候選多於空槽位時優先鎖定最大（最近）的
   const scale = bodyScaleOf(landmarks, BODY_SCALE_TORSO_RATIO, aspect);
 
-  // meanVisibility 給 dedupeDetections 在沒有既有 track 可對照時挑「比較可信的那一筆」用。
-  // world＝同一筆偵測的 worldLandmarks（公尺、原點在兩髖中間），只給逐幀紀錄用
+  // world＝worldLandmarks（公尺、原點在兩髖中間），只給逐幀紀錄用
   return { landmarks, world, centroid, scale, aspect, meanVisibility, strictPlausible };
 }
 
-// 兩筆偵測／兩個 track／候選人的肩膀中點距離（y 乘 aspect，跟尺度同一把尺）。三種物件都有 centroid、scale、aspect 欄位，
-// 所以下面這幾個函式對它們通用。
+// 肩膀中點距離；偵測、track、候選人都有 centroid／scale／aspect，下面幾個函式通用
 function centroidDistance(a, b) {
   return Math.hypot(a.centroid.x - b.centroid.x, (a.centroid.y - b.centroid.y) * a.aspect);
 }
 
-// 「同一具身體」的半徑：max(絕對值, 比例 × 較小的尺度)。拿不到尺度時退回純絕對值。
 function sameBodyGate(a, b, cfg) {
   const w = Math.min(a.scale ?? 0, b.scale ?? 0);
   return Math.max(cfg.sameBodyDist, cfg.sameBodyRatio * (Number.isFinite(w) ? w : 0));
@@ -145,8 +129,7 @@ export function isSameBody(a, b, cfg = DEFAULT_TRACKING_CONFIG) {
   return centroidDistance(a, b) < sameBodyGate(a, b, cfg);
 }
 
-// 這筆偵測「延續既有 track」的程度：離最近的 anchor 幾個尺度（越小越像）。沒有 anchor 時
-// 回傳 Infinity，排序時就只剩可見度在決定。
+// 離最近的 anchor 幾個尺度（越小越像延續既有 track）；沒有 anchor 時 Infinity
 function continuityRank(det, anchors) {
   let best = Infinity;
   for (const a of anchors) {
@@ -157,10 +140,8 @@ function continuityRank(det, anchors) {
   return best;
 }
 
-// 同一幀內，同一具身體只留一筆偵測（MediaPipe 對同一人多吐一組骨架時）。
-// 留哪一筆不能「留陣列第一筆」：MediaPipe 多人模式的輸出順序是上一幀的追蹤框排前面、
-// 這一幀重新偵測到的框 push 到尾端，於是真人常在尾端、靠 landmark 延續下來的幽靈在前面。
-// 順位：①最能延續既有 track 的（離最近的 anchor 幾個尺度）②平均可見度較高的。
+// 同一具身體只留一筆偵測。不能留第一筆：MediaPipe 多人模式把延續的追蹤框排前面、新偵測的放尾端，真人常在尾端、幽靈在前面。
+// 順位：①最能延續既有 track ②平均可見度高
 export function dedupeDetections(detections, cfg = DEFAULT_TRACKING_CONFIG, anchors = []) {
   if (detections.length < 2) return detections.slice();
   const ranked = detections.map((det) => ({ det, continuity: continuityRank(det, anchors) }));
@@ -173,10 +154,8 @@ export function dedupeDetections(detections, cfg = DEFAULT_TRACKING_CONFIG, anch
   return kept;
 }
 
-// 尺度＝max(肩寬, c × 軀幹長)，以畫面寬為單位：側身時肩寬縮到接近 0，軀幹長（肩膀中點到髖中點）不縮；髖部看不到時只用肩寬。
-// 正規化座標的 x 以寬、y 以高為單位，y 先乘 aspect（＝高 ÷ 寬）：不換的話 16:9 畫面上直的軀幹長會多算 1.78 倍，正面站著的人尺度就變成肩寬的兩倍多。
-// c＝0.6：正面時肩寬 ÷ 軀幹長，MediaPipe 官方範例人像量到 0.63、2026-10-29 三段逐幀紀錄量到 0.68～0.72，取略小的值讓正面時由肩寬決定（門檻維持原本以肩寬訂的意思）、
-// 側身時約為正面肩寬的 0.95。
+// 尺度＝max(肩寬, c × 軀幹長)，以畫面寬為單位：側身時肩寬趨近 0、軀幹長不縮；髖部看不到時只用肩寬。y 先乘 aspect，否則 16:9 下軀幹長多算 1.78 倍。
+// c＝0.6：正面時肩寬 ÷ 軀幹長，MediaPipe 官方範例人像 0.63、corpus/recordings 2026-10-29 三段逐幀紀錄 0.68～0.72；取略小，正面時由肩寬決定、側身約為正面肩寬的 0.95。
 export const BODY_SCALE_TORSO_RATIO = 0.6;
 const HIP_VISIBILITY_MIN = 0.5;
 
@@ -198,7 +177,7 @@ export function bodyScaleOf(landmarks, c, aspect) {
 //     MediaPipe 的速度除以推論框尺度（pose_landmarks_detector_graph.cc 把下一幀的推論框接到平滑的 OBJECT_SCALE_ROI，(寬＋高) ÷ 2，像素），
 //     我們除以 track.scale（肩寬），所以 beta＝80 ÷（推論框是幾個肩寬）。2026-10-28 實測：官方範例人像在無頭 Chromium 裡等速平移，
 //     人數 2 的原始輸出過這一層、跟人數 1 的真平滑逐幀比，移動中的平均落後量在 6.2（15～240px/s）、6.5（10～30px/s）個肩寬時一致；取 6，偏差 < 0.07px。
-//   2026-10-29 用 v6 紀錄（canon-2duet-visionlog-20261029-*，有真的靜止段）重掃：mc 0.5～8 × beta 5～40 的抖動、延遲都在目標內，mc 2、beta 20 不換；
+//   2026-10-29 用 v6 紀錄（corpus/recordings/canon-2duet-visionlog-20261029-*，有真的靜止段）重掃：mc 0.5～8 × beta 5～40 的抖動、延遲都在目標內，mc 2、beta 20 不換；
 //     EXTRA 改用 2D 合成速度（speed2d，見 OneEuroFilter2D）：x、y 各算各時谷底比原始晚一幀的觸發超過一成（時刻差 p90 48ms），2D 降到 32ms 以內、靜止抖動多不到 0.03px。
 //     MediaPipe 等效層照 MediaPipe 各算各。
 const MP_ROI_SHOULDERS = 6;
@@ -298,27 +277,24 @@ export class PersonTracker {
     this.events.push({ t: Math.round(nowMs), type, slot: slot + 1, ...extra });
   }
 
-  // 對外 API：回傳「這一幀真的偵測到的人」，語意跟 getActiveTracks() 一致，只是欄位精簡過。
+  // 同 getActiveTracks()，欄位精簡
   getTrackedUsers() {
     return this.getActiveTracks().map((t) => ({ id: t.id, slot: t.slot, landmarks: t.smoothed }));
   }
 
-  // 給手勢與在場名單用：回傳「這一幀真的有比對到偵測」的 track（missCount === 0）。人消失後槽位在 trackLossMs 緩衝期內仍佔著（短暫漏偵測不立刻釋放），
-  // 但緩衝期間畫面不該還畫著停在原地的骨架——緩衝期純粹是內部的槽位保留機制。
+  // 手勢與在場名單用：這一幀有配到的 track。漏配緩衝期（trackLossMs）只是內部保留槽位，不算在場
   getActiveTracks() {
     return this.tracks.filter((t) => t !== null && t.missCount === 0);
   }
 
-  // 給畫面繪製用：這一幀有比對到的 track，外加「最後一次比對到之後 drawHoldMs 內」的 track
-  // （用它最後一次平滑後的骨架畫），接住 MediaPipe 偶發的單幀漏偵測。手勢那一路刻意不用這個。
+  // 繪製用：外加最後一次配到之後 drawHoldMs 內的 track（畫它最後的骨架）
   getDrawableTracks(nowMs) {
     const { drawHoldMs } = this.cfg;
     return this.tracks.filter((t) => t !== null
       && (t.missCount === 0 || nowMs - t.lastSeenMs <= drawHoldMs));
   }
 
-  // 到最近的另一個「上一幀有配對到」的槽位的肩膀中點距離；沒有這種鄰居時是 Infinity。只算上一幀確實有人的槽位（update() 算成本時 missCount 還沒遞增）：
-  // 漏配中的槽位的人可能已經走掉，拿它的舊位置去收斂鄰居的門檻，會讓一個人一離場就把旁邊的人卡到動彈不得。
+  // 到最近另一個上一幀有配到的槽位的距離（沒有是 Infinity）。不算漏配中的：那個人可能已走掉，拿舊位置收斂門檻會把旁邊的人卡住
   _nearestOtherTrackDist(track) {
     let best = Infinity;
     for (const other of this.tracks) {
@@ -328,8 +304,8 @@ export class PersonTracker {
     return best;
   }
 
-  // 「這筆偵測貼上這個槽位的 ID」的成本；Infinity＝不允許。門檻三層：基本門檻 → 漏配緩衝期放寬 → 依最近鄰居收斂（見 DEFAULT_TRACKING_CONFIG 的「逐幀配對」）。
-  // 純粹依位置判斷，不看顏色；比對上一次的實際位置、不做速度外插——外插會把單幀雜訊往錯誤方向多推一截。
+  // 偵測貼上這個槽位的成本（Infinity＝不允許）。門檻：基本 → 漏配放寬 → 依鄰居收斂（見 DEFAULT_TRACKING_CONFIG）。
+  // 比對上一次的實際位置、不做速度外插：外插會把單幀雜訊往錯的方向多推一截
   _trackDetectionCost(track, det, nowMs) {
     const { gatePos, gatePosRatio, graceGate, graceGateRatio,
             ambiguityRatio, ambiguityFloorRatio, missGraceMs } = this.cfg;
@@ -339,8 +315,6 @@ export class PersonTracker {
     if (inGraceWindow) {
       gate = Math.max(gate, graceGate, graceGateRatio * track.scale);
     }
-    // 歧義收斂：門檻不得超過到最近鄰居距離的一半（單人時鄰居距離是 Infinity，等於不收斂），
-    // 但保留 ambiguityFloorRatio × 尺度給真人一幀內的正常位移。
     gate = Math.max(
       Math.min(gate, ambiguityRatio * this._nearestOtherTrackDist(track)),
       ambiguityFloorRatio * track.scale);
@@ -350,7 +324,7 @@ export class PersonTracker {
     return posDist / gate;
   }
 
-  // 幫剛確認鎖定的新候選人挑槽位：ID 只是顯示提示，不做身分認回，直接給任一個空槽位
+  // 新候選人給任一個空槽位（不做身分認回）
   _resolveSlotForNewIdentity() {
     const freeSlot = this.tracks.findIndex((t) => t === null);
     return freeSlot;
@@ -358,24 +332,24 @@ export class PersonTracker {
 
   _createTrack(slot, det, nowMs) {
     const n = det.landmarks.length;
-    // 人數 1 時 MediaPipe 已先平滑過一層，人數 ≥ 2 時沒有（參考文件第 6 點），兩邊各一串（ONE_EURO_STAGES）
+    // 人數 1 時 MediaPipe 已先平滑一層，≥ 2 時沒有（見 ONE_EURO_STAGES）
     const stages = this.cfg.maxUsers === 1 ? ONE_EURO_STAGES.single : ONE_EURO_STAGES.multi;
     const track = {
       slot,
-      id: slot + 1, // ID 恆等於槽位編號（1~maxUsers），純粹是顯示提示，不做身分認回
+      id: slot + 1,
       centroid: { ...det.centroid },
-      // 這個人在畫面上的尺度（bodyScaleOf），位置門檻、平滑的速度與手勢門檻都以它為單位；在 _updateTrack 裡以 EMA 更新。
+      // bodyScaleOf，在 _updateTrack 裡 EMA 更新
       scale: det.scale,
       aspect: det.aspect,
-      lockedAtMs: nowMs,     // 鎖定時刻；兩個槽位落在同一具身體上時，用它決定誰比較新
-      duplicateSinceMs: 0,   // 與另一個槽位重疊的起算時刻（0 ＝ 目前沒有重疊）
-      // 只濾 x／y：整個專案沒有任何地方讀 z。每個節點一串，每層是一個 OneEuroFilter2D（speed2d）或 x、y 各一個 OneEuroFilter
+      lockedAtMs: nowMs,     // 兩個槽位是同一具身體時，用它決定誰較新
+      duplicateSinceMs: 0,   // 跟另一個槽位重疊的起算時刻（0＝沒有）
+      // 只濾 x／y（沒有地方讀 z）。每節點一串，每層是 OneEuroFilter2D 或 x、y 各一個 OneEuroFilter
       filters: Array.from({ length: n }, () => stages.map((s) => (s.speed2d ? new OneEuroFilter2D(s) : { x: new OneEuroFilter(s), y: new OneEuroFilter(s) }))),
-      // 人數 ≥ 2 才有：補上 MediaPipe 單人時對可見度做的那一次低通（見 MEDIAPIPE_VISIBILITY_ALPHA）的狀態，每個節點一個
+      // 人數 ≥ 2 才有：MEDIAPIPE_VISIBILITY_ALPHA 低通的狀態，每節點一個
       visLowPass: this.cfg.maxUsers === 1 ? null : det.landmarks.map((p) => p.visibility ?? 1),
       smoothed: det.landmarks.map((p) => ({ ...p })),
-      missCount: 0,       // 0 ＝這一幀真的匹配到偵測（getActiveTracks 據此決定是否繪製）
-      lastSeenMs: nowMs   // 最後一次匹配到的時間；釋放槽位與漏配寬限期都以此為準
+      missCount: 0,       // 0＝這一幀有配到
+      lastSeenMs: nowMs   // 最後一次配到的時間（釋放與漏配寬限都以此為準）
     };
     this._updateTrack(track, det, nowMs);
     return track;
@@ -388,17 +362,17 @@ export class PersonTracker {
     track.lastSeenMs = nowMs;
     track.centroid = det.centroid;
     track.aspect = det.aspect;
-    track.raw = det.landmarks;  // 這一幀沒平滑的原始 landmark（開發用的逐幀紀錄讀它）
+    track.raw = det.landmarks;  // 原始 landmark（逐幀紀錄讀它）
     track.rawWorld = det.world;
     track.scale += (det.scale - track.scale) * scaleEmaAlpha;
-    // One Euro 的速度以「這個人的尺度／秒」計，遠近一致；y 的位移先乘 aspect 換成跟 x 同一把尺（MediaPipe 平滑前也先換成像素）
+    // 速度以「尺度／秒」計，遠近一致；y 先乘 aspect（MediaPipe 平滑前也先換成像素）
     const vsX = 1 / track.scale, vsY = det.aspect / track.scale;
     const chain = (layers, p) => {
       for (const l of layers) p = l instanceof OneEuroFilter2D ? l.filter(p, nowMs, vsX, vsY) : { x: l.x.filter(p.x, nowMs, vsX), y: l.y.filter(p.y, nowMs, vsY) };
       return p;
     };
 
-    // 上一幀的結果當作可見度 EMA 與遲滯的狀態來源（第一幀 prev 是 _createTrack 複製的原始 landmarks，沒有 visible 欄位，退回用 onGate 判定初始狀態）
+    // 上一幀的結果是 EMA 與遲滯的狀態（第一幀沒有 visible 欄位，用 onGate 判定初始狀態）
     const prev = track.smoothed, lowPass = track.visLowPass;
     track.smoothed = det.landmarks.map((p, i) => {
       let rawVis = p.visibility ?? 1;
@@ -411,13 +385,12 @@ export class PersonTracker {
         x,
         y,
         visibility,
-        // 遲滯：已顯示的關節要跌破 offGate 才隱藏，已隱藏的要跨過 onGate 才顯示
         visible: wasVisible ? visibility > visibilityOffGate : visibility >= visibilityOnGate
       };
     });
   }
 
-  // 候選新目標需持續出現足夠時間才可鎖定空位，避免路人短暫入鏡搶走槽位。
+  // 候選人持續出現夠久才鎖定空位（路人短暫入鏡不搶槽位）
   _updatePendingCandidates(detections, usedDetIdx, nowMs) {
     const hasFreeSlot = this.tracks.some((t) => t === null);
     if (!hasFreeSlot) { this.pending = []; return; }
@@ -426,10 +399,8 @@ export class PersonTracker {
     const unmatched = [];
     detections.forEach((d, i) => {
       if (usedDetIdx.has(i)) return;
-      // 這一幀沒被貪婪匹配選中的偵測，仍可能是已鎖定的某人的第二組骨架（幽靈）。不擋的話它會被當成「不明新人」持續累積，滿 lockConfirmMs 後鎖進另一個空槽，同一個真人同時冒出兩個 ID。
-      // 判準就是 isSameBody（肩膀中點 < 半個肩寬），跟 dedupe、硬保險三處同一道；只擋這麼窄是刻意的——差超過半個肩寬的就當第二個人。
+      // 沒配到的偵測可能是已鎖定者的幽靈，不擋會鎖成第二個 ID。只擋 isSameBody 這麼窄是刻意的：差超過半個肩寬就當第二個人
       if (this.tracks.some((t) => t && isSameBody(t, d, this.cfg))) return;
-      // 鎖定新 ID 要用嚴格的可見度門檻；寬鬆門檻是留給「已經在追蹤的人」的（見 buildDetection）。
       if (!d.strictPlausible) return;
       unmatched.push(d);
     });
@@ -460,7 +431,6 @@ export class PersonTracker {
           centroid: det.centroid,
           aspect: det.aspect,
           det,
-          // 以「持續出現多久」判定可否鎖定。
           firstSeenMs: nowMs,
           lastSeenMs: nowMs,
           matchedThisFrame: true,
@@ -468,32 +438,31 @@ export class PersonTracker {
       }
     }
 
-    // 這一幀沒匹配到任何偵測的候選人：在 pendingGraceMs 內先留著，不要把累積的時間歸零。
+    // 沒配到的候選人在 pendingGraceMs 內留著
     this.pending.forEach((p, pi) => {
       if (usedPending.has(pi)) return;
       p.matchedThisFrame = false;
       if (nowMs - p.lastSeenMs <= this.cfg.pendingGraceMs) nextPending.push(p);
     });
 
-    // 候選人數可能多於空槽位：優先鎖定尺度較大（離攝影機較近）的人，避免背景／邊緣的路人搶走鏡頭前主要使用者的槽位；沒搶到的候選人不丟棄，下一幀繼續排序。
-    // 兩個條件都要滿足才可鎖定：①累積出現時間夠久 ②這一幀確實有匹配到偵測（寬限期會讓短暫漏配的候選人留在名單裡，不檢查的話已走出畫面的候選人會拿著過期的 det 鎖進槽位）。
+    // 優先鎖定尺度大（較近）的，背景路人不搶鏡頭前的人；沒搶到的下一幀繼續排。
+    // 鎖定要 ①出現夠久 ②這一幀有配到（否則已走出畫面的候選人會拿過期的 det 鎖進來）
     const ready = nextPending.filter(
       (p) => p.matchedThisFrame && nowMs - p.firstSeenMs >= this.cfg.lockConfirmMs);
     ready.sort((a, b) => b.det.scale - a.det.scale);
 
     for (const p of ready) {
       const slot = this._resolveSlotForNewIdentity();
-      if (slot === -1) continue; // 這幀空槽位已被更靠近鏡頭的候選人用完，留著下一幀再排隊
+      if (slot === -1) continue;
       this.tracks[slot] = this._createTrack(slot, p.det, nowMs);
       this._logEvent(nowMs, 'lock', slot, { scale: round3(p.det.scale), vis: round3(p.det.meanVisibility), strict: p.det.strictPlausible });
-      p.isLocked = true; // 已鎖定，下方過濾掉
+      p.isLocked = true;
     }
 
     this.pending = nextPending.filter((p) => !p.isLocked);
   }
 
-  // 「一具身體只能有一個 ID」的最後一道硬保險：dedupe 與候選人抑制應已擋掉幽靈，這裡收萬一漏網的——兩個 live 槽位的肩膀中點落在同一具身體的半徑內（isSameBody）
-  // 連續 duplicateTrackConfirmMs 就釋放較晚鎖定的那個。
+  // 一具身體一個 ID 的最後硬保險（收 dedupe 與候選抑制漏網的）：連續 duplicateTrackConfirmMs 是同一具身體就釋放較晚鎖定的
   _releaseDuplicateTracks(nowMs) {
     const { duplicateTrackConfirmMs } = this.cfg;
     const live = this.tracks.filter((t) => t !== null && t.missCount === 0);
@@ -517,7 +486,7 @@ export class PersonTracker {
     }
   }
 
-  // 每幀：把目前鎖定槽位與這一幀的偵測結果做最佳匹配（貪婪法，槽位數少故足夠）。傳進來的是 buildDetection 的結果（可以還沒 dedupe）：同一具身體的重複偵測在這裡用目前槽位當 anchor 挑該留哪一筆。
+  // 每幀：槽位與偵測貪婪匹配（槽位少，夠用）。重複偵測在這裡以目前槽位當 anchor 挑
   update(rawDetections, nowMs) {
     const detections = dedupeDetections(rawDetections, this.cfg, this.tracks);
     const usedDetIdx = new Set();
@@ -526,7 +495,7 @@ export class PersonTracker {
 
     this.tracks.forEach((track, slot) => {
       if (!track) return;
-      // 跟一個先鎖定的槽位是同一具身體（偏離肩膀的幽靈曾被鎖成 ID、又疊回真人）就讓它先挑：只比成本的話，偵測離後鎖那個的舊位置比較近就被它搶走，真人換成幽靈的 ID；而後鎖那個在漏配時不算 live，硬保險也收不到
+      // 跟先鎖定的槽位是同一具身體（幽靈曾被鎖成 ID 又疊回真人）就讓先鎖的先挑：只比成本的話真人可能換成幽靈的 ID，而漏配中的後鎖槽位硬保險也收不到
       const yields = this.tracks.some((o) => o && o.lockedAtMs < track.lockedAtMs && isSameBody(o, track, this.cfg));
       detections.forEach((det, di) => {
         const cost = this._trackDetectionCost(track, det, nowMs);
@@ -544,7 +513,7 @@ export class PersonTracker {
 
     this.tracks.forEach((track, slot) => {
       if (!track || usedSlot.has(slot)) return;
-      track.missCount++; // missCount === 0 是「這一幀真的有人」的判準（見 getActiveTracks）
+      track.missCount++;
       if (nowMs - track.lastSeenMs > this.cfg.trackLossMs) {
         this.tracks[slot] = null;
         this._logEvent(nowMs, 'loss', slot);
